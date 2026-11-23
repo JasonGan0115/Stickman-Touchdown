@@ -1,0 +1,81 @@
+// Prisma schema: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Rarity {
+  Common
+  Rare
+  Legendary
+}
+
+model Player {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  accountXp Int      @default(0)
+  level     Int      @default(1)
+
+  // Saved deck: up to 4 Card ids and up to 8 Augment ids (catalog ids, not PlayerAugment ids)
+  loadoutUnitIds    String[] @default([])
+  loadoutAugmentIds String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cards    PlayerCard[]
+  augments PlayerAugment[]
+}
+
+// Permanent units
+model Card {
+  id       String @id @default(uuid())
+  name     String @unique
+  type     String
+  manaCost Int
+
+  owners PlayerCard[]
+}
+
+model Augment {
+  id             String @id @default(uuid())
+  name           String @unique
+  rarity         Rarity
+  effectModifier Float
+
+  holders PlayerAugment[]
+}
+
+// Temporary augment grants. A player may hold the same augment more than once
+// (for example, after it expires and is granted again), so this has its own id.
+model PlayerAugment {
+  id         String   @id @default(uuid())
+  playerId   String
+  augmentId  String
+  acquiredAt DateTime @default(now())
+  expiresAt  DateTime
+
+  player  Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  augment Augment @relation(fields: [augmentId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, expiresAt])
+  @@index([augmentId])
+}
+
+// Permanent card unlocks: one row per player per card
+model PlayerCard {
+  playerId   String
+  cardId     String
+  unlockedAt DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  card   Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@id([playerId, cardId])
+  @@index([cardId])
+}

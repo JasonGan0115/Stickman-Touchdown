@@ -1,0 +1,17 @@
+# Applies to both client/ and server/ (each also has its own .gitignore)
+
+# Dependencies
+node_modules/
+
+# Secrets and local env files
+.env
+.env.*
+!.env.example
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
