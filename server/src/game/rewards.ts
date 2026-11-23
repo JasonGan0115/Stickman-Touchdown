@@ -1,12 +1,14 @@
 import { Rarity } from "../../generated/prisma/client";
 import { prisma } from "../db";
 import { ensurePlayer } from "../players";
+import { describeAugment } from "./augments";
 import { AUGMENT_DURATION_MS, LOSER_XP, WINNER_XP } from "./constants";
 
 export interface AugmentReward {
   name: string;
   rarity: Rarity;
   effectModifier: number;
+  effect: string | null; // e.g. "+10% unit health"; null for an augment with no in-match effect defined
   expiresAt: string; // ISO timestamp
 }
 
@@ -57,6 +59,7 @@ export async function grantMatchReward(username: string, xp: number, rarity: Rar
         name: augment.name,
         rarity: augment.rarity,
         effectModifier: augment.effectModifier,
+        effect: describeAugment(augment.id) ?? null,
         expiresAt: grant.expiresAt.toISOString(),
       },
     };

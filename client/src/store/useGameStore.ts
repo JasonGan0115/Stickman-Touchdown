@@ -54,6 +54,7 @@ export interface AugmentReward {
   name: string;
   rarity: 'Common' | 'Rare' | 'Legendary';
   effectModifier: number;
+  effect?: string | null; // e.g. "+10% unit health"
   expiresAt: string;
 }
 
@@ -80,6 +81,7 @@ export interface MatchStartInfo {
   roomPlayers: RoomPlayer[];
   loadout: Loadout;
   hand: HandCard[];
+  boosts: string[];
   durationMs: number;
 }
 
@@ -104,6 +106,7 @@ export interface GameState {
   loadout: Loadout | null;
   hand: HandCard[];
   selectedCardId: string | null; // the card a tap in the endzone will spawn
+  boosts: string[]; // this player's augment effects for the match, e.g. "+10% unit health"
   tournament: TournamentInfo | null;
 
   // Live state (from state_update, 30x per second)
@@ -144,6 +147,7 @@ const initialMatchState = {
   loadout: null,
   hand: [] as HandCard[],
   selectedCardId: null as string | null,
+  boosts: [] as string[],
   tournament: null,
   matchTimer: 0,
   mana: 0,
@@ -169,7 +173,7 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
         : { isConnected, localSocketId: null, ...initialMatchState },
     ),
   setQueued: (queueMode) => set({ ...initialMatchState, matchStatus: 'queued', queueMode }),
-  startMatch: ({ roomID, mode, roomPlayers, loadout, hand, durationMs }) =>
+  startMatch: ({ roomID, mode, roomPlayers, loadout, hand, boosts, durationMs }) =>
     set({
       ...initialMatchState,
       matchStatus: 'in_match',
@@ -178,6 +182,7 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
       roomPlayers,
       loadout,
       hand,
+      boosts,
       selectedCardId: hand[0]?.cardId ?? null,
       matchTimer: durationMs,
     }),

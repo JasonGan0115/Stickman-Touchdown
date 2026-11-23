@@ -144,6 +144,7 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
         )}
       </View>
       <CardHand store={store} compact={compact} />
+      {!compact && <BoostsLine store={store} />}
     </View>
   );
 }
@@ -271,6 +272,17 @@ function CardHand({ store, compact }: { store: GameStore; compact: boolean }) {
   );
 }
 
+/** This match's augment effects, so the player can see their deck's augments are doing something. */
+function BoostsLine({ store }: { store: GameStore }) {
+  const boosts = useStore(store, (s) => s.boosts);
+  if (!boosts.length) return null;
+  return (
+    <Text style={styles.boosts} numberOfLines={2}>
+      Augments: {boosts.join(' · ')}
+    </Text>
+  );
+}
+
 /** Briefly shows why a spawn was refused (by the client check or the server). */
 function SpawnToast({ store }: { store: GameStore }) {
   const spawnError = useStore(store, (s) => s.spawnError);
@@ -388,6 +400,7 @@ const styles = StyleSheet.create({
   cardLetterCompact: { fontSize: 15 },
   cardName: { color: '#fff', fontSize: 11, fontWeight: '700' },
   cardType: { color: '#8a8f9c', fontSize: 10 },
+  boosts: { color: '#c9a6ff', fontSize: 11, fontWeight: '700', textAlign: 'center', paddingHorizontal: 8 },
 
   debugBadge: { position: 'absolute', top: '42%', alignSelf: 'center', backgroundColor: '#ff00aa', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, pointerEvents: 'none' },
   debugBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 1 },

@@ -9,6 +9,7 @@ import {
   TICK_MS,
   WINNING_SCORE,
 } from "./constants";
+import { combineAugments, type Modifiers } from "./augments";
 import { getUnitStats, resolveHand, type UnitStats, type UnitType } from "./units";
 
 // Pure match state + rules. No sockets or timers here, so it can be tested on its own.
@@ -48,6 +49,7 @@ export interface PlayerState {
   score: number;
   loadout: Loadout;
   hand: string[]; // card ids this player may spawn (see resolveHand)
+  modifiers: Modifiers; // combined augment boosts, applied to every unit this player spawns
 }
 
 export interface Match {
@@ -93,6 +95,7 @@ export function createMatch(id: string, mode: MatchMode, p1: MatchSeat, p2: Matc
     mana: STARTING_MANA,
     score: 0,
     hand: resolveHand(seat.loadout.unitIds),
+    modifiers: combineAugments(seat.loadout.augmentIds),
   });
   return {
     id,
@@ -127,8 +130,13 @@ function hasReachedEnemyEndzone(player: PlayerNumber, y: number): boolean {
 const inRange = (n: unknown, max: number): n is number =>
   typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= max;
 
-/** Creates a unit of the given card for `player` and adds it to the field. No validation; see trySpawn. */
+/**
+ * Creates a unit of the given card for `player`, boosted by the player's
+ * augments, and adds it to the field. No validation; see trySpawn.
+ */
 export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: number, y: number): Entity {
+  const mods = player.modifiers;
+  const health = Math.round(stats.health * mods.health);
   const entity: Entity = {
     id: `unit_${match.nextEntityNumber++}`,
     cardId: stats.cardId,
@@ -136,12 +144,12 @@ export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: 
     ownerId: player.id,
     x,
     y,
-    health: stats.health,
-    maxHealth: stats.health,
-    damage: stats.damage,
-    attackRange: stats.attackRange,
-    attackIntervalTicks: stats.attackIntervalTicks,
-    speed: stats.speed,
+    health,
+    maxHealth: health,
+    damage: Math.round(stats.damage * mods.damage),
+    attackRange: stats.attackRange * mods.range,
+    attackIntervalTicks: Math.max(1, Math.round(stats.attackIntervalTicks / mods.attackSpeed)),
+    speed: stats.speed * mods.speed,
     splashRadius: stats.splashRadius,
     state: "moving",
     targetId: null,
@@ -179,7 +187,7 @@ function distance(a: Entity, b: Entity): number {
 
 /**
  * Advances the simulation by one tick:
- *   1. regenerate mana
+ *   1. regenerate mana (faster with mana regen augments)
  *   2. targeting: each unit locks onto the nearest enemy within its attackRange
  *   3. damage: attacking units hit their target once every attackIntervalTicks;
  *      splash units also hit other enemies within splashRadius of the target
@@ -191,7 +199,7 @@ function distance(a: Entity, b: Entity): number {
 export function stepMatch(match: Match): TickEvents {
   const events: TickEvents = { scored: [], engaged: [], hits: [], killed: [] };
 
-  for (const p of match.players) p.mana = Math.min(MAX_MANA, p.mana + MANA_PER_TICK);
+  for (const p of match.players) p.mana = Math.min(MAX_MANA, p.mana + MANA_PER_TICK * p.modifiers.manaRegen);
 
   // 2. Targeting
   const targets = new Map<Entity, Entity>();

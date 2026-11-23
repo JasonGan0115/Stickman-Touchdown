@@ -59,6 +59,7 @@ interface MatchFoundPayload {
   players: RoomPlayer[];
   loadout: Loadout;
   hand: HandCard[];
+  boosts: string[];
   durationMs: number;
 }
 
@@ -138,6 +139,7 @@ export class SocketService {
         roomPlayers: d.players,
         loadout: d.loadout,
         hand: d.hand ?? [],
+        boosts: d.boosts ?? [],
         durationMs: d.durationMs,
       }),
     );

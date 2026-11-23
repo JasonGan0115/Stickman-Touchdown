@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { FIELD_HEIGHT, MAX_MANA } from "./constants";
+import { combineAugments, describeModifiers, NO_MODIFIERS } from "./augments";
+import { FIELD_HEIGHT, MAX_MANA, TICK_RATE } from "./constants";
 import { addUnit, createMatch, stepMatch, trySpawn, type Match } from "./match";
 import { DEFAULT_HAND, UNIT_STATS } from "./units";
 
@@ -11,11 +12,11 @@ const MAGE = UNIT_STATS.card_battle_mage;
 
 const P1_HOME_Y = FIELD_HEIGHT - 20; // inside Player 1's endzone (bottom)
 
-function newMatch(p1Units: string[] = [], p2Units: string[] = []): Match {
+function newMatch(p1Units: string[] = [], p2Units: string[] = [], p1Augments: string[] = []): Match {
   return createMatch(
     "test",
     "standard",
-    { id: "p1", username: "one", loadout: { unitIds: p1Units, augmentIds: [] } },
+    { id: "p1", username: "one", loadout: { unitIds: p1Units, augmentIds: p1Augments } },
     { id: "p2", username: "two", loadout: { unitIds: p2Units, augmentIds: [] } },
   );
 }
@@ -142,5 +143,63 @@ describe("stepMatch", () => {
 
     stepMatch(match);
     assert.equal(ally.health, FOOT.health);
+  });
+});
+
+describe("augments", () => {
+  const withAugments = (...ids: string[]) => newMatch([], [], ids);
+
+  test("no augments means no change", () => {
+    assert.deepEqual(newMatch().players[0].modifiers, NO_MODIFIERS);
+  });
+
+  test("boosts to the same stat stack by multiplying; unknown ids are ignored", () => {
+    const mods = combineAugments(["aug_iron_skin", "aug_titans_blessing", "aug_not_real"]);
+    assert.ok(Math.abs(mods.health - 1.1 * 1.5) < 1e-9);
+    assert.equal(mods.damage, 1);
+    assert.deepEqual(describeModifiers(mods), ["+65% unit health"]);
+  });
+
+  test("health and damage boosts apply to units at spawn, and only for their owner", () => {
+    const match = withAugments("aug_iron_skin", "aug_berserker_rage");
+    const [p1, p2] = match.players;
+    const mine = addUnit(match, p1, FOOT, 100, 600);
+    const theirs = addUnit(match, p2, FOOT, 300, 40);
+    assert.equal(mine.health, Math.round(FOOT.health * 1.1));
+    assert.equal(mine.maxHealth, mine.health);
+    assert.equal(mine.damage, Math.round(FOOT.damage * 1.25));
+    assert.equal(theirs.health, FOOT.health);
+    assert.equal(theirs.damage, FOOT.damage);
+  });
+
+  test("attack speed shortens the time between hits", () => {
+    const match = withAugments("aug_phoenix_heart");
+    const unit = addUnit(match, match.players[0], FOOT, 100, 600);
+    assert.equal(unit.attackIntervalTicks, Math.round(FOOT.attackIntervalTicks / 1.4));
+    assert.ok(unit.attackIntervalTicks < FOOT.attackIntervalTicks);
+  });
+
+  test("move speed and range boosts apply", () => {
+    const match = withAugments("aug_swift_boots", "aug_eagle_eye");
+    const unit = addUnit(match, match.players[0], ARCHER, 100, 600);
+    assert.equal(unit.speed, ARCHER.speed * 1.05);
+    assert.equal(unit.attackRange, ARCHER.attackRange * 1.15);
+  });
+
+  test("a range boost lets an archer engage an enemy just past normal range", () => {
+    const match = withAugments("aug_eagle_eye");
+    const [p1, p2] = match.players;
+    const archer = addUnit(match, p1, ARCHER, 180, 500);
+    addUnit(match, p2, FOOT, 180, 500 - (ARCHER.attackRange + 10)); // 140 away; boosted range is ~150
+    stepMatch(match);
+    assert.equal(archer.state, "attacking");
+  });
+
+  test("mana regen boost fills mana faster", () => {
+    const match = withAugments("aug_mana_surge");
+    steps(match, TICK_RATE); // one second
+    const [boosted, normal] = match.players;
+    assert.ok(Math.abs(boosted.mana - 1.2) < 1e-9);
+    assert.ok(Math.abs(normal.mana - 1) < 1e-9);
   });
 });

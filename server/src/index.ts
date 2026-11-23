@@ -32,6 +32,7 @@ import {
 } from "./game/match";
 import { grantMatchReward, REWARD_PACKAGES, type PlayerReward } from "./game/rewards";
 import { getWeeklyTournamentConfig, type WeeklyTournamentConfig } from "./game/tournament";
+import { describeModifiers } from "./game/augments";
 import { DEFAULT_HAND, getUnitStats, handCardInfo } from "./game/units";
 import { EMPTY_LOADOUT, getMatchLoadout, USERNAME_PATTERN } from "./players";
 import { playerRouter } from "./routes/player";
@@ -294,6 +295,7 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
       players: roomPlayers, // the client finds itself in here by socket id
       loadout: p.loadout,
       hand: p.hand.map(handCardInfo), // the cards this player can spawn, with costs
+      boosts: describeModifiers(p.modifiers), // e.g. ["+10% unit health"]; opponent's are not sent
       durationMs: MATCH_DURATION_MS,
       tickRate: TICK_RATE,
       winningScore: WINNING_SCORE,
@@ -315,6 +317,7 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
     console.log(`  P${p.number} ${p.username}`);
     console.log(`    units    (${p.loadout.unitIds.length}): ${JSON.stringify(p.loadout.unitIds)}`);
     console.log(`    hand     (${p.hand.length}): ${JSON.stringify(p.hand)}`);
+    console.log(`    boosts: ${describeModifiers(p.modifiers).join(", ") || "none"}`);
     console.log(`    augments (${p.loadout.augmentIds.length}): ${JSON.stringify(p.loadout.augmentIds)}`);
   }
 

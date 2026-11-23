@@ -71,7 +71,8 @@ export function PostMatchScreen({ store, service, compact = false }: Props) {
                 </Text>
                 <Text style={styles.augmentName}>{results.rewards.augment.name}</Text>
                 <Text style={styles.augmentMeta}>
-                  ×{results.rewards.augment.effectModifier} · expires in {hoursUntil(results.rewards.augment.expiresAt)}h
+                  {results.rewards.augment.effect ?? `×${results.rewards.augment.effectModifier}`} · expires in{' '}
+                  {hoursUntil(results.rewards.augment.expiresAt)}h
                 </Text>
               </View>
             ) : (

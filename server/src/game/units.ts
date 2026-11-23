@@ -1,8 +1,8 @@
 import { LOADOUT_UNIT_SLOTS, TICK_RATE } from "./constants";
 
-// Combat stats for each card. Keys are the fixed Card ids from prisma/seed.ts,
-// and `cost` must match that card's manaCost there. The database says which
-// cards a player owns; the numbers that decide a fight live here, in code.
+// Combat stats for each card. Keys are the fixed Card ids; prisma/seed.ts
+// writes the Card rows (name, type, manaCost) from this table. The database
+// says which cards a player owns; the numbers that decide a fight live here.
 
 export type UnitType = "Melee" | "Ranged" | "Tank" | "Caster";
 

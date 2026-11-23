@@ -33,6 +33,7 @@ interface AugmentGrant {
   name: string;
   rarity: Rarity;
   effectModifier: number;
+  effect?: string | null; // e.g. "+10% unit health"
   expiresAt: string;
 }
 
@@ -260,7 +261,7 @@ export function DeckBuilderScreen({ onClose }: { onClose: () => void }) {
     kind: 'augment',
     key: g.grantId,
     title: g.name,
-    subtitle: `×${g.effectModifier} · ${hoursUntil(g.expiresAt)}h left`,
+    subtitle: `${g.effect ?? `×${g.effectModifier}`} · ${hoursUntil(g.expiresAt)}h left`,
     rarity: g.rarity,
   });
 

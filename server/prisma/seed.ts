@@ -2,28 +2,24 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, Rarity } from "../generated/prisma/client";
 
+import { AUGMENTS } from "../src/game/augments";
+import { UNIT_STATS } from "../src/game/units";
+
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
 
 // Fixed ids (instead of random UUIDs) so server code such as the Weekly
-// Tournament config can refer to specific cards and augments.
-const cards = [
-  { id: "card_footsoldier", name: "Footsoldier", type: "Melee", manaCost: 1 },
-  { id: "card_archer", name: "Archer", type: "Ranged", manaCost: 2 },
-  { id: "card_shield_bearer", name: "Shield Bearer", type: "Tank", manaCost: 3 },
-  { id: "card_battle_mage", name: "Battle Mage", type: "Caster", manaCost: 4 },
-];
+// Tournament config can refer to specific cards and augments. The rows come
+// from the gameplay tables in src/game, so a card's cost or an augment's
+// modifier is only ever written in one place.
+const cards = Object.values(UNIT_STATS).map((u) => ({ id: u.cardId, name: u.name, type: u.type, manaCost: u.cost }));
 
-const augments = [
-  { id: "aug_swift_boots", name: "Swift Boots", rarity: Rarity.Common, effectModifier: 1.05 },
-  { id: "aug_iron_skin", name: "Iron Skin", rarity: Rarity.Common, effectModifier: 1.1 },
-  { id: "aug_quick_hands", name: "Quick Hands", rarity: Rarity.Common, effectModifier: 1.08 },
-  { id: "aug_mana_surge", name: "Mana Surge", rarity: Rarity.Rare, effectModifier: 1.2 },
-  { id: "aug_berserker_rage", name: "Berserker Rage", rarity: Rarity.Rare, effectModifier: 1.25 },
-  { id: "aug_eagle_eye", name: "Eagle Eye", rarity: Rarity.Rare, effectModifier: 1.15 },
-  { id: "aug_titans_blessing", name: "Titan's Blessing", rarity: Rarity.Legendary, effectModifier: 1.5 },
-  { id: "aug_phoenix_heart", name: "Phoenix Heart", rarity: Rarity.Legendary, effectModifier: 1.4 },
-];
+const augments = Object.values(AUGMENTS).map((a) => ({
+  id: a.id,
+  name: a.name,
+  rarity: Rarity[a.rarity],
+  effectModifier: a.modifier,
+}));
 
 async function main() {
   // Upsert on the unique name makes the seed safe to re-run. `update` also sets

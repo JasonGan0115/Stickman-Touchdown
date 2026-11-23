@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { describeAugment } from "./game/augments";
 import { LOADOUT_AUGMENT_SLOTS, LOADOUT_UNIT_SLOTS } from "./game/constants";
 import type { Loadout } from "./game/match";
 
@@ -59,6 +60,7 @@ export async function getCollection(username: string) {
       name: g.augment.name,
       rarity: g.augment.rarity,
       effectModifier: g.augment.effectModifier,
+      effect: describeAugment(g.augmentId) ?? null,
       expiresAt: g.expiresAt.toISOString(),
     })),
     loadout,
