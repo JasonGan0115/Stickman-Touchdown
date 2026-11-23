@@ -1,0 +1,29 @@
+# Local development database for Touchdown PVP.
+#   Start:  docker compose up -d      (from this folder)
+#   Stop:   docker compose stop
+# Data lives in the touchdown-pgdata volume, so it survives restarts.
+# Port 5433 (not 5432) so it never clashes with another project's Postgres.
+# Bound to 127.0.0.1 only: these are local dev credentials, not for production.
+name: touchdown-pvp
+
+services:
+  db:
+    image: postgres:16
+    container_name: touchdown-postgres
+    environment:
+      POSTGRES_USER: touchdown
+      POSTGRES_PASSWORD: touchdown_dev
+      POSTGRES_DB: touchdown
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - touchdown-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U touchdown -d touchdown"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  touchdown-pgdata:
+    name: touchdown-pgdata
