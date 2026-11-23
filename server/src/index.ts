@@ -10,13 +10,12 @@ import {
   FIELD_WIDTH,
   MATCH_DURATION_MS,
   MAX_CATCH_UP_TICKS,
-  SPAWN_COST,
   TICK_MS,
   TICK_RATE,
   WINNING_SCORE,
 } from "./game/constants";
 import {
-  addRunner,
+  addUnit,
   createMatch,
   getLeader,
   getOpponent,
@@ -33,6 +32,7 @@ import {
 } from "./game/match";
 import { grantMatchReward, REWARD_PACKAGES, type PlayerReward } from "./game/rewards";
 import { getWeeklyTournamentConfig, type WeeklyTournamentConfig } from "./game/tournament";
+import { DEFAULT_HAND, getUnitStats, handCardInfo } from "./game/units";
 import { EMPTY_LOADOUT, getMatchLoadout, USERNAME_PATTERN } from "./players";
 import { playerRouter } from "./routes/player";
 
@@ -129,11 +129,12 @@ if (!IS_PRODUCTION) {
     }
   });
 
-  // Drops one Player 1 Runner and one Player 2 Runner facing each other on the
-  // same x, 20 units apart (inside attackRange), so combat starts on the next tick.
-  // Body (all optional): { matchId, x, p1Y, p2Y }. Defaults to the newest match, mid-field.
+  // Drops one Player 1 unit and one Player 2 unit facing each other on the
+  // same x, 20 units apart (inside every unit's attackRange), so combat starts on the next tick.
+  // Body (all optional): { matchId, x, p1Y, p2Y, p1CardId, p2CardId }.
+  // Defaults to the newest match, mid-field, Footsoldier vs Footsoldier.
   app.post("/debug/spawn-collision", (req, res) => {
-    const { matchId, x, p1Y, p2Y } = req.body ?? {};
+    const { matchId, x, p1Y, p2Y, p1CardId, p2CardId } = req.body ?? {};
     const match = typeof matchId === "string" ? matches.get(matchId) : [...matches.values()].at(-1);
     if (!match || match.ended) {
       res.status(404).json({ ok: false, error: matchId ? `No active match ${matchId}` : "No active match" });
@@ -146,9 +147,17 @@ if (!IS_PRODUCTION) {
     const y1 = num(p1Y, FIELD_HEIGHT / 2 + 10);
     const y2 = num(p2Y, FIELD_HEIGHT / 2 - 10);
 
+    const fallback = getUnitStats(DEFAULT_HAND[0])!;
+    const stats1 = p1CardId === undefined ? fallback : getUnitStats(p1CardId);
+    const stats2 = p2CardId === undefined ? fallback : getUnitStats(p2CardId);
+    if (!stats1 || !stats2) {
+      res.status(400).json({ ok: false, error: "Unknown card id" });
+      return;
+    }
+
     const [p1, p2] = match.players;
-    const a = addRunner(match, p1, spawnX, y1);
-    const b = addRunner(match, p2, spawnX, y2);
+    const a = addUnit(match, p1, stats1, spawnX, y1);
+    const b = addUnit(match, p2, stats2, spawnX, y2);
     console.log(`[debug] spawn-collision in ${match.id}: P1 ${a.id} at (${spawnX}, ${y1}) vs P2 ${b.id} at (${spawnX}, ${y2})`);
     res.json({ ok: true, matchId: match.id, entities: [a, b] });
   });
@@ -284,6 +293,7 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
       mode,
       players: roomPlayers, // the client finds itself in here by socket id
       loadout: p.loadout,
+      hand: p.hand.map(handCardInfo), // the cards this player can spawn, with costs
       durationMs: MATCH_DURATION_MS,
       tickRate: TICK_RATE,
       winningScore: WINNING_SCORE,
@@ -304,6 +314,7 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
   for (const p of match.players) {
     console.log(`  P${p.number} ${p.username}`);
     console.log(`    units    (${p.loadout.unitIds.length}): ${JSON.stringify(p.loadout.unitIds)}`);
+    console.log(`    hand     (${p.hand.length}): ${JSON.stringify(p.hand)}`);
     console.log(`    augments (${p.loadout.augmentIds.length}): ${JSON.stringify(p.loadout.augmentIds)}`);
   }
 
@@ -382,6 +393,7 @@ function broadcastState(match: Match, timeRemainingMs: number): number {
   // Only what the client needs to draw; combat stats stay on the server
   const entities = match.entities.map((e) => ({
     id: e.id,
+    cardId: e.cardId,
     type: e.type,
     ownerId: e.ownerId,
     x: round(e.x, 2),
@@ -507,7 +519,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("spawn_request", (payload: { x?: unknown; y?: unknown } | undefined) => {
+  socket.on("spawn_request", (payload: { cardId?: unknown; x?: unknown; y?: unknown } | undefined) => {
     const matchId = playerMatch.get(socket.id);
     const match = matchId ? matches.get(matchId) : undefined;
     const player = match ? getPlayer(match, socket.id) : undefined;
@@ -516,17 +528,21 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const result = trySpawn(match, player, payload?.x, payload?.y);
+    const result = trySpawn(match, player, payload?.cardId, payload?.x, payload?.y);
     if (!result.ok) {
-      debugLog("spawn", `P${player.number} ${socket.id} rejected: ${result.reason} (mana ${player.mana.toFixed(2)}, x ${String(payload?.x)}, y ${String(payload?.y)})`);
-      socket.emit("spawn_rejected", { reason: result.reason, mana: round(player.mana, 2), cost: SPAWN_COST });
+      debugLog(
+        "spawn",
+        `P${player.number} ${socket.id} rejected: ${result.reason} (card ${String(payload?.cardId)}, mana ${player.mana.toFixed(2)}, ` +
+          `x ${String(payload?.x)}, y ${String(payload?.y)})`,
+      );
+      socket.emit("spawn_rejected", { reason: result.reason, mana: round(player.mana, 2), cost: result.cost });
       return;
     }
 
-    const { entity } = result;
+    const { entity, stats } = result;
     debugLog(
       "spawn",
-      `P${player.number} ${socket.id} spawned ${entity.id} at (${entity.x.toFixed(1)}, ${entity.y.toFixed(1)}), mana left ${player.mana.toFixed(2)}`,
+      `P${player.number} ${socket.id} spawned ${stats.name} ${entity.id} for ${stats.cost} mana at (${entity.x.toFixed(1)}, ${entity.y.toFixed(1)}), mana left ${player.mana.toFixed(2)}`,
     );
   });
 

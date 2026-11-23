@@ -1,20 +1,15 @@
 import {
-  ATTACK_INTERVAL_TICKS,
   ENDZONE_DEPTH,
   FIELD_HEIGHT,
   FIELD_WIDTH,
   MANA_PER_TICK,
   MATCH_DURATION_MS,
   MAX_MANA,
-  RUNNER_SPEED,
-  SPAWN_COST,
   STARTING_MANA,
   TICK_MS,
-  UNIT_ATTACK_RANGE,
-  UNIT_DAMAGE,
-  UNIT_HEALTH,
   WINNING_SCORE,
 } from "./constants";
+import { getUnitStats, resolveHand, type UnitStats, type UnitType } from "./units";
 
 // Pure match state + rules. No sockets or timers here, so it can be tested on its own.
 
@@ -28,7 +23,8 @@ export interface Loadout {
 
 export interface Entity {
   id: string;
-  type: "Runner";
+  cardId: string;
+  type: UnitType;
   ownerId: string; // socket id of the player who spawned it
   x: number;
   y: number;
@@ -36,6 +32,9 @@ export interface Entity {
   maxHealth: number;
   damage: number;
   attackRange: number;
+  attackIntervalTicks: number;
+  speed: number; // world units per tick
+  splashRadius: number;
   state: "moving" | "attacking";
   targetId: string | null;
   attackCooldown: number; // ticks until this unit may hit again
@@ -48,6 +47,7 @@ export interface PlayerState {
   mana: number; // fractional; regenerates every tick
   score: number;
   loadout: Loadout;
+  hand: string[]; // card ids this player may spawn (see resolveHand)
 }
 
 export interface Match {
@@ -69,14 +69,19 @@ export interface MatchSeat {
   loadout: Loadout;
 }
 
-export type SpawnRejection = "invalid_coordinates" | "not_enough_mana" | "outside_home_endzone";
+export type SpawnRejection =
+  | "invalid_coordinates"
+  | "unknown_card"
+  | "card_not_in_hand"
+  | "not_enough_mana"
+  | "outside_home_endzone";
 
 /** Things that happened during a tick, for logging. */
 export interface TickEvents {
   scored: { scorer: PlayerState; entity: Entity }[];
   // A unit started attacking this tick; health is captured before this tick's damage
   engaged: { attacker: Entity; target: Entity; attackerHealth: number; targetHealth: number }[];
-  hits: { attacker: Entity; target: Entity }[];
+  hits: { attacker: Entity; target: Entity; splash: boolean }[];
   killed: Entity[];
 }
 
@@ -87,6 +92,7 @@ export function createMatch(id: string, mode: MatchMode, p1: MatchSeat, p2: Matc
     number,
     mana: STARTING_MANA,
     score: 0,
+    hand: resolveHand(seat.loadout.unitIds),
   });
   return {
     id,
@@ -121,18 +127,22 @@ function hasReachedEnemyEndzone(player: PlayerNumber, y: number): boolean {
 const inRange = (n: unknown, max: number): n is number =>
   typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= max;
 
-/** Creates a Runner owned by `player` and adds it to the field. No validation; see trySpawn. */
-export function addRunner(match: Match, player: PlayerState, x: number, y: number): Entity {
+/** Creates a unit of the given card for `player` and adds it to the field. No validation; see trySpawn. */
+export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: number, y: number): Entity {
   const entity: Entity = {
-    id: `runner_${match.nextEntityNumber++}`,
-    type: "Runner",
+    id: `unit_${match.nextEntityNumber++}`,
+    cardId: stats.cardId,
+    type: stats.type,
     ownerId: player.id,
     x,
     y,
-    health: UNIT_HEALTH,
-    maxHealth: UNIT_HEALTH,
-    damage: UNIT_DAMAGE,
-    attackRange: UNIT_ATTACK_RANGE,
+    health: stats.health,
+    maxHealth: stats.health,
+    damage: stats.damage,
+    attackRange: stats.attackRange,
+    attackIntervalTicks: stats.attackIntervalTicks,
+    speed: stats.speed,
+    splashRadius: stats.splashRadius,
     state: "moving",
     targetId: null,
     attackCooldown: 0,
@@ -145,15 +155,19 @@ export function addRunner(match: Match, player: PlayerState, x: number, y: numbe
 export function trySpawn(
   match: Match,
   player: PlayerState,
+  cardId: unknown,
   x: unknown,
   y: unknown,
-): { ok: true; entity: Entity } | { ok: false; reason: SpawnRejection } {
+): { ok: true; entity: Entity; stats: UnitStats } | { ok: false; reason: SpawnRejection; cost?: number } {
   if (!inRange(x, FIELD_WIDTH) || !inRange(y, FIELD_HEIGHT)) return { ok: false, reason: "invalid_coordinates" };
-  if (player.mana < SPAWN_COST) return { ok: false, reason: "not_enough_mana" };
+  const stats = getUnitStats(cardId);
+  if (!stats) return { ok: false, reason: "unknown_card" };
+  if (!player.hand.includes(stats.cardId)) return { ok: false, reason: "card_not_in_hand" };
+  if (player.mana < stats.cost) return { ok: false, reason: "not_enough_mana", cost: stats.cost };
   if (!isInHomeEndzone(player.number, y)) return { ok: false, reason: "outside_home_endzone" };
 
-  player.mana -= SPAWN_COST;
-  return { ok: true, entity: addRunner(match, player, x, y) };
+  player.mana -= stats.cost;
+  return { ok: true, entity: addUnit(match, player, stats, x, y), stats };
 }
 
 /** Pythagorean distance between two units' centres. */
@@ -167,7 +181,8 @@ function distance(a: Entity, b: Entity): number {
  * Advances the simulation by one tick:
  *   1. regenerate mana
  *   2. targeting: each unit locks onto the nearest enemy within its attackRange
- *   3. damage: attacking units hit their target once every ATTACK_INTERVAL_TICKS
+ *   3. damage: attacking units hit their target once every attackIntervalTicks;
+ *      splash units also hit other enemies within splashRadius of the target
  *   4. remove dead units (health <= 0)
  *   5. move units that aren't attacking; score those reaching the enemy endzone
  * Targeting and damage both read positions/health from the start of the tick,
@@ -211,8 +226,18 @@ export function stepMatch(match: Match): TickEvents {
     const target = targets.get(unit);
     if (target && unit.attackCooldown === 0) {
       target.health = Math.max(0, target.health - unit.damage);
-      unit.attackCooldown = ATTACK_INTERVAL_TICKS;
-      events.hits.push({ attacker: unit, target });
+      unit.attackCooldown = unit.attackIntervalTicks;
+      events.hits.push({ attacker: unit, target, splash: false });
+
+      if (unit.splashRadius > 0) {
+        for (const other of match.entities) {
+          if (other === target || other.ownerId === unit.ownerId) continue;
+          if (distance(other, target) <= unit.splashRadius) {
+            other.health = Math.max(0, other.health - unit.damage);
+            events.hits.push({ attacker: unit, target: other, splash: true });
+          }
+        }
+      }
     }
   }
 
@@ -229,7 +254,7 @@ export function stepMatch(match: Match): TickEvents {
 
     if (unit.state === "moving") {
       // Player 1 attacks up the field (y decreases), Player 2 attacks down (y increases)
-      unit.y += owner.number === 1 ? -RUNNER_SPEED : RUNNER_SPEED;
+      unit.y += owner.number === 1 ? -unit.speed : unit.speed;
       if (hasReachedEnemyEndzone(owner.number, unit.y)) {
         owner.score++;
         events.scored.push({ scorer: owner, entity: unit });

@@ -4,11 +4,13 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 export type MatchStatus = 'idle' | 'queued' | 'in_match' | 'ended';
 export type MatchMode = 'standard' | 'tournament';
 export type PlayerNumber = 1 | 2;
+export type UnitType = 'Melee' | 'Ranged' | 'Tank' | 'Caster';
 
 /** A unit on the field, in server world units (see FIELD_WIDTH/FIELD_HEIGHT; y=0 is Player 1's top). */
 export interface Entity {
   id: string;
-  type: 'Runner';
+  cardId: string;
+  type: UnitType;
   ownerId: string; // socket id of the owning player
   x: number;
   y: number;
@@ -26,6 +28,14 @@ export interface RoomPlayer {
 export interface Loadout {
   unitIds: string[];
   augmentIds: string[];
+}
+
+/** A card this player can spawn in the current match (sent in 'match_found'). */
+export interface HandCard {
+  cardId: string;
+  name: string;
+  type: UnitType;
+  cost: number;
 }
 
 export interface TournamentInfo {
@@ -69,6 +79,7 @@ export interface MatchStartInfo {
   mode: MatchMode;
   roomPlayers: RoomPlayer[];
   loadout: Loadout;
+  hand: HandCard[];
   durationMs: number;
 }
 
@@ -91,6 +102,8 @@ export interface GameState {
   mode: MatchMode | null;
   roomPlayers: RoomPlayer[];
   loadout: Loadout | null;
+  hand: HandCard[];
+  selectedCardId: string | null; // the card a tap in the endzone will spawn
   tournament: TournamentInfo | null;
 
   // Live state (from state_update, 30x per second)
@@ -111,6 +124,7 @@ export interface GameState {
   setQueued: (mode: MatchMode) => void;
   startMatch: (info: MatchStartInfo) => void;
   setTournament: (info: TournamentInfo) => void;
+  selectCard: (cardId: string) => void;
   applyStateUpdate: (update: StateUpdate) => void;
   setSpawnError: (message: string | null) => void;
   setGameOver: (info: GameOverInfo) => void;
@@ -128,6 +142,8 @@ const initialMatchState = {
   mode: null,
   roomPlayers: [] as RoomPlayer[],
   loadout: null,
+  hand: [] as HandCard[],
+  selectedCardId: null as string | null,
   tournament: null,
   matchTimer: 0,
   mana: 0,
@@ -153,9 +169,20 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
         : { isConnected, localSocketId: null, ...initialMatchState },
     ),
   setQueued: (queueMode) => set({ ...initialMatchState, matchStatus: 'queued', queueMode }),
-  startMatch: ({ roomID, mode, roomPlayers, loadout, durationMs }) =>
-    set({ ...initialMatchState, matchStatus: 'in_match', roomID, mode, roomPlayers, loadout, matchTimer: durationMs }),
+  startMatch: ({ roomID, mode, roomPlayers, loadout, hand, durationMs }) =>
+    set({
+      ...initialMatchState,
+      matchStatus: 'in_match',
+      roomID,
+      mode,
+      roomPlayers,
+      loadout,
+      hand,
+      selectedCardId: hand[0]?.cardId ?? null,
+      matchTimer: durationMs,
+    }),
   setTournament: (tournament) => set({ tournament }),
+  selectCard: (selectedCardId) => set({ selectedCardId }),
   applyStateUpdate: ({ timeRemainingMs, mana, score, entities }) =>
     set({ matchTimer: timeRemainingMs, mana, score, entities }),
   setSpawnError: (message) => set({ spawnError: message ? { message, at: Date.now() } : null }),
@@ -168,6 +195,9 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
 /** Our seat in the current room, found by comparing our socket id with the room's players. */
 export const selectMe = (s: GameState): RoomPlayer | undefined =>
   s.roomPlayers.find((p) => p.id === s.localSocketId);
+
+export const selectSelectedCard = (s: GameState): HandCard | undefined =>
+  s.hand.find((c) => c.cardId === s.selectedCardId);
 
 export const selectOpponent = (s: GameState): RoomPlayer | undefined =>
   s.roomPlayers.find((p) => p.id !== s.localSocketId);

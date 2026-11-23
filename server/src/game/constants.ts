@@ -1,5 +1,6 @@
 // Gameplay tuning. The client keeps copies of FIELD_WIDTH, FIELD_HEIGHT,
-// ENDZONE_DEPTH, MAX_MANA and SPAWN_COST in client/src/game/constants.ts — keep them in sync.
+// ENDZONE_DEPTH and MAX_MANA in client/src/game/constants.ts — keep them in sync.
+// Card costs are sent to the client in 'match_found', so they need no copy.
 
 // --- Loop ---
 export const TICK_RATE = 30; // ticks per second
@@ -27,15 +28,7 @@ export const MANA_PER_SECOND = 1;
 export const MANA_PER_TICK = MANA_PER_SECOND / TICK_RATE;
 
 // --- Units ---
-export const SPAWN_COST = 3;
-export const RUNNER_SPEED_PER_SECOND = FIELD_HEIGHT * 0.1; // 64 units/s (~7s endzone to endzone)
-export const RUNNER_SPEED = RUNNER_SPEED_PER_SECOND / TICK_RATE; // per tick
-
-// --- Combat ---
-export const UNIT_HEALTH = 100;
-export const UNIT_DAMAGE = 10;
-export const UNIT_ATTACK_RANGE = 40; // world units, centre to centre
-export const ATTACK_INTERVAL_TICKS = TICK_RATE; // one hit per second
+// Each card's cost, health, damage, range and speed live in ./units.ts
 
 // --- Loadouts ---
 export const LOADOUT_UNIT_SLOTS = 4;

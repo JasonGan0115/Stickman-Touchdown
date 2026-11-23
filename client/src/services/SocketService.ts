@@ -2,12 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { io, type Socket } from 'socket.io-client';
 
-import { SPAWN_COST } from '../game/constants';
 import {
   useGameStore,
   type Entity,
   type GameOverInfo,
   type GameStore,
+  type HandCard,
   type Loadout,
   type MatchMode,
   type MatchResults,
@@ -35,18 +35,30 @@ function makeGuestName(label: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-const SPAWN_REJECTION_TEXT: Record<string, string> = {
-  not_enough_mana: `Not enough mana (need ${SPAWN_COST})`,
-  outside_home_endzone: 'Server: outside your endzone',
-  invalid_coordinates: 'Invalid spawn position',
-  not_in_match: 'Match is not running',
-};
+function spawnRejectionText(reason: string, cost?: number): string {
+  switch (reason) {
+    case 'not_enough_mana':
+      return cost ? `Not enough mana (need ${cost})` : 'Not enough mana';
+    case 'outside_home_endzone':
+      return 'Server: outside your endzone';
+    case 'invalid_coordinates':
+      return 'Invalid spawn position';
+    case 'unknown_card':
+    case 'card_not_in_hand':
+      return "That card isn't in your hand";
+    case 'not_in_match':
+      return 'Match is not running';
+    default:
+      return 'Spawn rejected';
+  }
+}
 
 interface MatchFoundPayload {
   matchId: string;
   mode: MatchMode;
   players: RoomPlayer[];
   loadout: Loadout;
+  hand: HandCard[];
   durationMs: number;
 }
 
@@ -125,6 +137,7 @@ export class SocketService {
         mode: d.mode,
         roomPlayers: d.players,
         loadout: d.loadout,
+        hand: d.hand ?? [],
         durationMs: d.durationMs,
       }),
     );
@@ -137,8 +150,8 @@ export class SocketService {
       if (matchId === state().roomID) state().applyStateUpdate({ timeRemainingMs, mana, score, entities });
     });
 
-    socket.on('spawn_rejected', ({ reason }: { reason: string }) =>
-      state().setSpawnError(SPAWN_REJECTION_TEXT[reason] ?? 'Spawn rejected'),
+    socket.on('spawn_rejected', ({ reason, cost }: { reason: string; cost?: number }) =>
+      state().setSpawnError(spawnRejectionText(reason, cost)),
     );
 
     socket.on('game_over', (info: GameOverInfo) => state().setGameOver(info));
@@ -160,9 +173,9 @@ export class SocketService {
     this.store.getState().reset();
   }
 
-  /** Asks the server to spawn a Runner at (x, y) in world units. The server validates mana and position. */
-  spawn(x: number, y: number): void {
-    this.socket?.emit('spawn_request', { x, y });
+  /** Asks the server to spawn the given card at (x, y) in world units. The server validates the card, mana and position. */
+  spawn(cardId: string, x: number, y: number): void {
+    this.socket?.emit('spawn_request', { cardId, x, y });
   }
 
   /** DEBUG: ends the current match as a Player 1 win (server ignores this in production). */

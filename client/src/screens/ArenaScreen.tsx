@@ -3,9 +3,9 @@ import { Pressable, StyleSheet, Text, View, type GestureResponderEvent, type Lay
 import { useStore } from 'zustand';
 
 import { EntitySquare } from '../components/EntitySquare';
-import { ENDZONE_DEPTH, FIELD_HEIGHT, FIELD_WIDTH, MAX_MANA, SPAWN_COST } from '../game/constants';
+import { ENDZONE_DEPTH, FIELD_HEIGHT, FIELD_WIDTH, MAX_MANA, UNIT_TYPE_LETTER } from '../game/constants';
 import type { SocketService } from '../services/SocketService';
-import { selectMe, selectOpponent, type GameStore } from '../store/useGameStore';
+import { selectMe, selectOpponent, selectSelectedCard, type GameStore } from '../store/useGameStore';
 
 const COLORS = {
   field: '#2f8f3a',
@@ -82,55 +82,68 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
         `(server map: ${worldY < FIELD_HEIGHT / 2 ? 'TOP' : 'BOTTOM'} half)`,
     );
 
-    // Quick local check for instant feedback; the server re-checks everything
-    if (screenY < FIELD_HEIGHT - ENDZONE_DEPTH) {
-      console.log(`${tag} not sent: tap was outside the bottom endzone on screen`);
-      store.getState().setSpawnError('Tap inside your endzone to spawn');
+    // Quick local checks for instant feedback; the server re-checks everything
+    const state = store.getState();
+    const card = selectSelectedCard(state);
+    if (!card) {
+      state.setSpawnError('Pick a card first');
       return;
     }
-    service.spawn(worldX, worldY);
+    if (screenY < FIELD_HEIGHT - ENDZONE_DEPTH) {
+      console.log(`${tag} not sent: tap was outside the bottom endzone on screen`);
+      state.setSpawnError('Tap inside your endzone to spawn');
+      return;
+    }
+    if (state.mana < card.cost) {
+      state.setSpawnError(`Not enough mana for ${card.name} (need ${card.cost})`);
+      return;
+    }
+    service.spawn(card.cardId, worldX, worldY);
   };
 
   return (
-    <View style={styles.area} onLayout={onLayout}>
-      {scale > 0 && (
-        <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn}>
-          {/* The game board, in world coordinates, rotated for Player 2 */}
-          <View style={[styles.board, flipped && styles.rotated]}>
-            <View style={[styles.line, { top: '50%' }]} />
-            {/* World top = Player 2's endzone, world bottom = Player 1's */}
-            <View
-              style={[
-                styles.endzone,
-                { top: 0, backgroundColor: viewAs === 2 ? COLORS.homeEndzone : COLORS.enemyEndzone },
-              ]}
-            />
-            <View
-              style={[
-                styles.endzone,
-                { bottom: 0, backgroundColor: viewAs === 1 ? COLORS.homeEndzone : COLORS.enemyEndzone },
-              ]}
-            />
-            <EntityLayer store={store} scale={scale} flipped={flipped} />
-          </View>
-
-          {/* Screen-space overlays: never rotated, so text stays upright */}
-          <View style={[styles.endzoneLabelWrap, { top: 0 }]}>
-            <Text style={styles.endzoneLabel}>ENEMY ENDZONE</Text>
-          </View>
-          <View style={[styles.endzoneLabelWrap, { bottom: 0 }]}>
-            <Text style={styles.endzoneLabel}>HOME ENDZONE · TAP TO SPAWN</Text>
-          </View>
-          <Hud store={store} compact={compact} />
-          <ManaBar store={store} />
-          <SpawnToast store={store} />
-          {debugFlipView && (
-            <View style={styles.debugBadge}>
-              <Text style={styles.debugBadgeText}>DEBUG: VIEW FLIPPED</Text>
+    <View style={styles.root}>
+      <View style={styles.area} onLayout={onLayout}>
+        {scale > 0 && (
+          <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn}>
+            {/* The game board, in world coordinates, rotated for Player 2 */}
+            <View style={[styles.board, flipped && styles.rotated]}>
+              <View style={[styles.line, { top: '50%' }]} />
+              {/* World top = Player 2's endzone, world bottom = Player 1's */}
+              <View
+                style={[
+                  styles.endzone,
+                  { top: 0, backgroundColor: viewAs === 2 ? COLORS.homeEndzone : COLORS.enemyEndzone },
+                ]}
+              />
+              <View
+                style={[
+                  styles.endzone,
+                  { bottom: 0, backgroundColor: viewAs === 1 ? COLORS.homeEndzone : COLORS.enemyEndzone },
+                ]}
+              />
+              <EntityLayer store={store} scale={scale} flipped={flipped} />
             </View>
-          )}
-        </Pressable>
-      )}
+
+            {/* Screen-space overlays: never rotated, so text stays upright */}
+            <View style={[styles.endzoneLabelWrap, { top: 0 }]}>
+              <Text style={styles.endzoneLabel}>ENEMY ENDZONE</Text>
+            </View>
+            <View style={[styles.endzoneLabelWrap, { bottom: 0 }]}>
+              <Text style={styles.endzoneLabel}>HOME ENDZONE · TAP TO SPAWN</Text>
+            </View>
+            <Hud store={store} compact={compact} />
+            <ManaBar store={store} />
+            <SpawnToast store={store} />
+            {debugFlipView && (
+              <View style={styles.debugBadge}>
+                <Text style={styles.debugBadgeText}>DEBUG: VIEW FLIPPED</Text>
+              </View>
+            )}
+          </Pressable>
+        )}
+      </View>
+      <CardHand store={store} compact={compact} />
     </View>
   );
 }
@@ -150,6 +163,7 @@ function EntityLayer({ store, scale, flipped }: { store: GameStore; scale: numbe
           // Your units are blue and the opponent's red, matching your blue home
           // endzone and red enemy endzone. For Player 1 this is Player 1 = blue.
           color={e.ownerId === localSocketId ? COLORS.myUnit : COLORS.enemyUnit}
+          type={e.type}
           health={e.health}
           maxHealth={e.maxHealth}
           attacking={e.state === 'attacking'}
@@ -192,7 +206,8 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
 
 function ManaBar({ store }: { store: GameStore }) {
   const mana = useStore(store, (s) => s.mana);
-  const canSpawn = mana >= SPAWN_COST;
+  const cost = useStore(store, (s) => selectSelectedCard(s)?.cost ?? Infinity);
+  const canSpawn = mana >= cost;
 
   return (
     <View style={styles.manaWrap}>
@@ -206,6 +221,52 @@ function ManaBar({ store }: { store: GameStore }) {
       <Text style={styles.manaText}>
         {Math.floor(mana)} / {MAX_MANA}
       </Text>
+    </View>
+  );
+}
+
+/**
+ * The player's cards for this match. Tap one to select it, then tap the
+ * endzone to spawn it. Cards you can't afford yet are dimmed. Mana is only
+ * read here as whole points, so this re-renders once per mana point, not every tick.
+ */
+function CardHand({ store, compact }: { store: GameStore; compact: boolean }) {
+  const hand = useStore(store, (s) => s.hand);
+  const selectedCardId = useStore(store, (s) => s.selectedCardId);
+  const wholeMana = useStore(store, (s) => Math.floor(s.mana));
+
+  if (!hand.length) return null;
+  return (
+    <View style={styles.hand}>
+      {hand.map((card) => {
+        const selected = card.cardId === selectedCardId;
+        const affordable = wholeMana >= card.cost;
+        return (
+          <Pressable
+            key={card.cardId}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={`${card.name}, ${card.cost} mana`}
+            onPress={() => store.getState().selectCard(card.cardId)}
+            style={({ pressed }) => [
+              styles.card,
+              compact && styles.cardCompact,
+              selected && styles.cardSelected,
+              !affordable && styles.cardUnaffordable,
+              pressed && styles.cardPressed,
+            ]}
+          >
+            <View style={styles.cardCost}>
+              <Text style={styles.cardCostText}>{card.cost}</Text>
+            </View>
+            <Text style={[styles.cardLetter, compact && styles.cardLetterCompact]}>{UNIT_TYPE_LETTER[card.type]}</Text>
+            <Text style={styles.cardName} numberOfLines={1}>
+              {card.name}
+            </Text>
+            {!compact && <Text style={styles.cardType}>{card.type}</Text>}
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -229,6 +290,7 @@ function SpawnToast({ store }: { store: GameStore }) {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, alignSelf: 'stretch', gap: 8 },
   area: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   board: {
     position: 'absolute',
@@ -293,6 +355,40 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     fontWeight: '700',
   },
+  hand: { flexDirection: 'row', gap: 8, paddingHorizontal: 4 },
+  card: {
+    flex: 1,
+    minHeight: 76,
+    backgroundColor: '#262a35',
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  cardCompact: { minHeight: 48, paddingVertical: 3 },
+  cardSelected: { borderColor: COLORS.homeEndzone, backgroundColor: '#2f3a52' },
+  cardUnaffordable: { opacity: 0.45 },
+  cardPressed: { transform: [{ scale: 0.96 }] },
+  cardCost: {
+    position: 'absolute',
+    top: 4,
+    left: 4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: COLORS.mana,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardCostText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  cardLetter: { color: '#fff', fontSize: 22, fontWeight: '900' },
+  cardLetterCompact: { fontSize: 15 },
+  cardName: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  cardType: { color: '#8a8f9c', fontSize: 10 },
+
   debugBadge: { position: 'absolute', top: '42%', alignSelf: 'center', backgroundColor: '#ff00aa', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, pointerEvents: 'none' },
   debugBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
 });
