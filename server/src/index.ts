@@ -349,7 +349,7 @@ function gameTick(match: Match): void {
   // setInterval drifts, so tick count alone would make the match run long.
   const timeRemainingMs = Math.max(0, match.endsAt - Date.now());
 
-  const recipients = broadcastState(match, timeRemainingMs);
+  const recipients = broadcastState(match, timeRemainingMs, events.killed.map((e) => e.id));
 
   // Once per second (every TICK_RATE ticks): prove the loop is alive and who it's emitting to
   if (match.tick % TICK_RATE === 0) {
@@ -392,7 +392,7 @@ function logTickEvents(match: Match, events: TickEvents): void {
 }
 
 /** Sends each player their own view of the state (own mana, you/opponent score). Returns how many sockets received it. */
-function broadcastState(match: Match, timeRemainingMs: number): number {
+function broadcastState(match: Match, timeRemainingMs: number, killedIds: string[] = []): number {
   // Only what the client needs to draw; combat stats stay on the server
   const entities = match.entities.map((e) => ({
     id: e.id,
@@ -404,6 +404,8 @@ function broadcastState(match: Match, timeRemainingMs: number): number {
     health: e.health,
     maxHealth: e.maxHealth,
     state: e.state,
+    targetId: e.targetId,
+    lastHitTick: e.lastHitTick, // changes on every hit, so the client can play the swing
   }));
   let recipients = 0;
 
@@ -418,6 +420,7 @@ function broadcastState(match: Match, timeRemainingMs: number): number {
       mana: round(p.mana, 2), // opponent's mana is deliberately not sent
       score: { you: p.score, opponent: opponent.score },
       entities,
+      killed: killedIds, // units that died this tick (the rest that vanished scored)
     });
     recipients++;
   }

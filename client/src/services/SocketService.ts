@@ -70,6 +70,7 @@ interface StateUpdatePayload {
   mana: number;
   score: Score;
   entities: Entity[];
+  killed?: string[];
 }
 
 /** One Socket.io connection that writes into one game store. Create several to simulate several players. */
@@ -147,9 +148,9 @@ export class SocketService {
       if (matchId === state().roomID) state().setTournament(tournament);
     });
 
-    socket.on('state_update', ({ matchId, timeRemainingMs, mana, score, entities }: StateUpdatePayload) => {
+    socket.on('state_update', ({ matchId, timeRemainingMs, mana, score, entities, killed }: StateUpdatePayload) => {
       // Ignore stray ticks from a match we're no longer in
-      if (matchId === state().roomID) state().applyStateUpdate({ timeRemainingMs, mana, score, entities });
+      if (matchId === state().roomID) state().applyStateUpdate({ timeRemainingMs, mana, score, entities, killed: killed ?? [] });
     });
 
     socket.on('spawn_rejected', ({ reason, cost }: { reason: string; cost?: number }) =>

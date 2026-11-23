@@ -13,7 +13,4 @@ export const TICK_MS = 1000 / 30;
 export const LOADOUT_UNIT_SLOTS = 4;
 export const LOADOUT_AUGMENT_SLOTS = 8;
 
-export const UNIT_SIZE = 30; // px, rendered size of a unit
-
-/** Letter drawn on each unit so the four types can be told apart on the field. */
-export const UNIT_TYPE_LETTER = { Melee: 'M', Ranged: 'R', Tank: 'T', Caster: 'C' } as const;
+export const SPRITE_SIZE = 40; // px, rendered size of a stickman unit

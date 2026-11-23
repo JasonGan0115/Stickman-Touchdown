@@ -39,6 +39,7 @@ export interface Entity {
   state: "moving" | "attacking";
   targetId: string | null;
   attackCooldown: number; // ticks until this unit may hit again
+  lastHitTick: number; // match tick of this unit's latest hit, -1 if it hasn't hit yet (drives client animations)
 }
 
 export interface PlayerState {
@@ -154,6 +155,7 @@ export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: 
     state: "moving",
     targetId: null,
     attackCooldown: 0,
+    lastHitTick: -1,
   };
   match.entities.push(entity);
   return entity;
@@ -235,6 +237,7 @@ export function stepMatch(match: Match): TickEvents {
     if (target && unit.attackCooldown === 0) {
       target.health = Math.max(0, target.health - unit.damage);
       unit.attackCooldown = unit.attackIntervalTicks;
+      unit.lastHitTick = match.tick;
       events.hits.push({ attacker: unit, target, splash: false });
 
       if (unit.splashRadius > 0) {

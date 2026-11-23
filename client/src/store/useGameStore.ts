@@ -1,6 +1,8 @@
 import { create, type StateCreator } from 'zustand';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
+import { deriveEffects, updateEffects, type Effect } from '../game/effects';
+
 export type MatchStatus = 'idle' | 'queued' | 'in_match' | 'ended';
 export type MatchMode = 'standard' | 'tournament';
 export type PlayerNumber = 1 | 2;
@@ -17,6 +19,8 @@ export interface Entity {
   health: number;
   maxHealth: number;
   state: 'moving' | 'attacking';
+  targetId: string | null;
+  lastHitTick: number; // changes each time this unit hits; -1 before its first hit
 }
 
 export interface RoomPlayer {
@@ -90,6 +94,7 @@ export interface StateUpdate {
   mana: number;
   score: Score;
   entities: Entity[];
+  killed: string[]; // ids of units that died this tick
 }
 
 export interface GameState {
@@ -114,6 +119,7 @@ export interface GameState {
   mana: number; // 0..MAX_MANA, fractional
   score: Score;
   entities: Entity[];
+  effects: Effect[]; // short-lived visuals: arrows, damage numbers, falling units
 
   // Feedback + results
   spawnError: { message: string; at: number } | null;
@@ -153,6 +159,7 @@ const initialMatchState = {
   mana: 0,
   score: { you: 0, opponent: 0 },
   entities: [] as Entity[],
+  effects: [] as Effect[],
   spawnError: null,
   gameOver: null,
   matchResults: null,
@@ -188,10 +195,15 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
     }),
   setTournament: (tournament) => set({ tournament }),
   selectCard: (selectedCardId) => set({ selectedCardId }),
-  applyStateUpdate: ({ timeRemainingMs, mana, score, entities }) =>
-    set({ matchTimer: timeRemainingMs, mana, score, entities }),
+  applyStateUpdate: ({ timeRemainingMs, mana, score, entities, killed }) =>
+    set((s) => {
+      const now = Date.now();
+      const fresh = deriveEffects(s.entities, entities, killed, now);
+      return { matchTimer: timeRemainingMs, mana, score, entities, effects: updateEffects(s.effects, fresh, now) };
+    }),
   setSpawnError: (message) => set({ spawnError: message ? { message, at: Date.now() } : null }),
-  setGameOver: (gameOver) => set({ matchStatus: 'ended', gameOver, matchResults: null, entities: [], roomID: null }),
+  setGameOver: (gameOver) =>
+    set({ matchStatus: 'ended', gameOver, matchResults: null, entities: [], effects: [], roomID: null }),
   setMatchResults: (matchResults) => set({ matchResults }),
   toggleDebugFlipView: () => set((s) => ({ debugFlipView: !s.debugFlipView })),
   reset: () => set(initialMatchState),

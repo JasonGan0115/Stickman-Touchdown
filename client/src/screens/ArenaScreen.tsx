@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
 import { useStore } from 'zustand';
 
-import { EntitySquare } from '../components/EntitySquare';
-import { ENDZONE_DEPTH, FIELD_HEIGHT, FIELD_WIDTH, MAX_MANA, UNIT_TYPE_LETTER } from '../game/constants';
+import { EffectsLayer } from '../components/EffectsLayer';
+import { Stickman } from '../components/Stickman';
+import { UnitSprite } from '../components/UnitSprite';
+import { ENDZONE_DEPTH, FIELD_HEIGHT, FIELD_WIDTH, MAX_MANA } from '../game/constants';
 import type { SocketService } from '../services/SocketService';
 import { selectMe, selectOpponent, selectSelectedCard, type GameStore } from '../store/useGameStore';
 
 const COLORS = {
   field: '#2f8f3a',
+  fieldStripe: '#2a8133', // every other band between the endzones, like mowed grass
   fieldLine: 'rgba(255,255,255,0.25)',
   homeEndzone: '#8fd3ff', // light blue
   enemyEndzone: '#ff9a9a', // light red
@@ -18,6 +21,11 @@ const COLORS = {
 };
 
 const ENDZONE_PCT = `${(ENDZONE_DEPTH / FIELD_HEIGHT) * 100}%` as const;
+
+// The field between the endzones is split into 10 bands with a yard line between each
+const FIELD_BANDS = 10;
+const BAND_PCT = ((FIELD_HEIGHT - 2 * ENDZONE_DEPTH) / FIELD_HEIGHT) * 100 / FIELD_BANDS;
+const ENDZONE_PCT_NUM = (ENDZONE_DEPTH / FIELD_HEIGHT) * 100;
 
 function formatTime(ms: number): string {
   const totalSeconds = Math.ceil(ms / 1000);
@@ -45,6 +53,11 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
   // Which seat are we? Compare our local socket id with the room's player list.
   const myNumber = useStore(store, (s) => selectMe(s)?.number ?? null);
   const debugFlipView = useStore(store, (s) => s.debugFlipView);
+  const localSocketId = useStore(store, (s) => s.localSocketId);
+  const colorFor = useCallback(
+    (ownerId: string) => (ownerId === localSocketId ? COLORS.myUnit : COLORS.enemyUnit),
+    [localSocketId],
+  );
   const isPlayerTwo = myNumber === 2;
   // The debug toggle inverts the natural view, e.g. shows Player 1 what Player 2 sees
   const flipped = isPlayerTwo !== debugFlipView;
@@ -108,6 +121,7 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
           <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn}>
             {/* The game board, in world coordinates, rotated for Player 2 */}
             <View style={[styles.board, flipped && styles.rotated]}>
+<FieldStripes />
               <View style={[styles.line, { top: '50%' }]} />
               {/* World top = Player 2's endzone, world bottom = Player 1's */}
               <View
@@ -123,6 +137,7 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
                 ]}
               />
               <EntityLayer store={store} scale={scale} flipped={flipped} />
+              <EffectsLayer store={store} scale={scale} flipped={flipped} colorFor={colorFor} localSocketId={localSocketId} />
             </View>
 
             {/* Screen-space overlays: never rotated, so text stays upright */}
@@ -149,6 +164,27 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
   );
 }
 
+/** Grass bands and yard lines between the two endzones. Static, drawn under everything else. */
+const FieldStripes = memo(function FieldStripes() {
+  return (
+    <>
+      {Array.from({ length: FIELD_BANDS }, (_, i) => (
+        <View
+          key={i}
+          style={[
+            styles.band,
+            { top: `${ENDZONE_PCT_NUM + i * BAND_PCT}%`, height: `${BAND_PCT}%` },
+            i % 2 === 1 && { backgroundColor: COLORS.fieldStripe },
+          ]}
+        />
+      ))}
+      {Array.from({ length: FIELD_BANDS + 1 }, (_, i) => (
+        <View key={`l${i}`} style={[styles.yardLine, { top: `${ENDZONE_PCT_NUM + i * BAND_PCT}%` }]} />
+      ))}
+    </>
+  );
+});
+
 /** Renders every unit at its world position. Re-renders each tick, so it's kept separate from the HUD. */
 function EntityLayer({ store, scale, flipped }: { store: GameStore; scale: number; flipped: boolean }) {
   const entities = useStore(store, (s) => s.entities);
@@ -157,17 +193,19 @@ function EntityLayer({ store, scale, flipped }: { store: GameStore; scale: numbe
   return (
     <View style={styles.overlay}>
       {entities.map((e) => (
-        <EntitySquare
+        <UnitSprite
           key={e.id}
           left={e.x * scale}
           top={e.y * scale}
           // Your units are blue and the opponent's red, matching your blue home
           // endzone and red enemy endzone. For Player 1 this is Player 1 = blue.
           color={e.ownerId === localSocketId ? COLORS.myUnit : COLORS.enemyUnit}
+          mine={e.ownerId === localSocketId}
           type={e.type}
           health={e.health}
           maxHealth={e.maxHealth}
           attacking={e.state === 'attacking'}
+          lastHitTick={e.lastHitTick}
           boardFlipped={flipped}
         />
       ))}
@@ -260,7 +298,7 @@ function CardHand({ store, compact }: { store: GameStore; compact: boolean }) {
             <View style={styles.cardCost}>
               <Text style={styles.cardCostText}>{card.cost}</Text>
             </View>
-            <Text style={[styles.cardLetter, compact && styles.cardLetterCompact]}>{UNIT_TYPE_LETTER[card.type]}</Text>
+            <Stickman type={card.type} teamColor={COLORS.myUnit} size={compact ? 28 : 40} animated={false} />
             <Text style={styles.cardName} numberOfLines={1}>
               {card.name}
             </Text>
@@ -317,6 +355,8 @@ const styles = StyleSheet.create({
   },
   rotated: { transform: [{ rotate: '180deg' }] },
   line: { position: 'absolute', left: 0, right: 0, height: 3, backgroundColor: COLORS.fieldLine },
+  band: { position: 'absolute', left: 0, right: 0 },
+  yardLine: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: 'rgba(255,255,255,0.18)' },
   endzone: { position: 'absolute', left: 0, right: 0, height: ENDZONE_PCT },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
 
@@ -396,8 +436,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   cardCostText: { color: '#fff', fontSize: 11, fontWeight: '900' },
-  cardLetter: { color: '#fff', fontSize: 22, fontWeight: '900' },
-  cardLetterCompact: { fontSize: 15 },
   cardName: { color: '#fff', fontSize: 11, fontWeight: '700' },
   cardType: { color: '#8a8f9c', fontSize: 10 },
   boosts: { color: '#c9a6ff', fontSize: 11, fontWeight: '700', textAlign: 'center', paddingHorizontal: 8 },
