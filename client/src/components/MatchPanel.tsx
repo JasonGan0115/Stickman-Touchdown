@@ -87,6 +87,22 @@ export function MatchPanel({ service, store, label, compact = false }: Props) {
               {isDebug ? 'Join Weekly Tournament' : 'Weekly Tournament'}
             </Text>
           </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.button, styles.ai, (!isConnected || pressed) && styles.dimmed]}
+            disabled={!isConnected}
+            onPress={() => service.playVsAi(false)}
+          >
+            <Text style={styles.buttonText}>Play vs AI</Text>
+          </Pressable>
+          {__DEV__ && (
+            <Pressable
+              style={({ pressed }) => [styles.button, styles.ai, styles.aiWatch, (!isConnected || pressed) && styles.dimmed]}
+              disabled={!isConnected}
+              onPress={() => service.playVsAi(true)}
+            >
+              <Text style={styles.buttonText}>Watch AI vs AI</Text>
+            </Pressable>
+          )}
         </View>
       )}
     </View>
@@ -116,6 +132,8 @@ const styles = StyleSheet.create({
   secondary: { backgroundColor: '#3a3d46', minWidth: 0 },
   tournament: { backgroundColor: '#ffb020' },
   tournamentText: { color: '#1a1200' },
+  ai: { backgroundColor: '#534ab7' },
+  aiWatch: { backgroundColor: 'transparent', borderWidth: 2, borderColor: '#7f77dd' },
   dimmed: { opacity: 0.5 },
   buttonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
   debugRow: { flexDirection: 'row', justifyContent: 'center', gap: 8 },

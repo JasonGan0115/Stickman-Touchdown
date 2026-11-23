@@ -7,6 +7,7 @@ import {
   type Entity,
   type GameOverInfo,
   type GameStore,
+  type AiMatchInfo,
   type HandCard,
   type Loadout,
   type MatchMode,
@@ -60,6 +61,7 @@ interface MatchFoundPayload {
   loadout: Loadout;
   hand: HandCard[];
   boosts: string[];
+  ai?: AiMatchInfo | null;
   durationMs: number;
 }
 
@@ -141,6 +143,7 @@ export class SocketService {
         loadout: d.loadout,
         hand: d.hand ?? [],
         boosts: d.boosts ?? [],
+        ai: d.ai ?? null,
         durationMs: d.durationMs,
       }),
     );
@@ -169,6 +172,11 @@ export class SocketService {
 
   joinQueue(mode: MatchMode = 'standard'): void {
     this.socket?.emit(mode === 'tournament' ? 'join_tournament_queue' : 'join_queue');
+  }
+
+  /** Starts a practice match against the computer. With autoplay, the AI plays your side too. */
+  playVsAi(autoplay = false): void {
+    this.socket?.emit('join_bot_match', { autoplay });
   }
 
   leaveQueue(): void {

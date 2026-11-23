@@ -33,6 +33,7 @@ import {
 import { grantMatchReward, REWARD_PACKAGES, type PlayerReward } from "./game/rewards";
 import { getWeeklyTournamentConfig, type WeeklyTournamentConfig } from "./game/tournament";
 import { describeModifiers } from "./game/augments";
+import { botTick, createBot, type BotState } from "./game/bot";
 import { DEFAULT_HAND, getUnitStats, handCardInfo } from "./game/units";
 import { EMPTY_LOADOUT, getMatchLoadout, USERNAME_PATTERN } from "./players";
 import { playerRouter } from "./routes/player";
@@ -104,6 +105,12 @@ const queuedIn = new Map<string, MatchMode>(); // socket id -> which queue it's 
 const pairing = new Set<string>(); // sockets paired but waiting for loadouts to load
 const matches = new Map<string, Match>(); // matchId -> match
 const playerMatch = new Map<string, string>(); // socket id -> matchId
+// Practice matches against the computer: matchId -> (player id -> bot brain).
+// A bot seat's id is "bot_..." with no socket behind it; with autoplay the
+// human's own seat gets a bot brain too, so they can watch AI vs AI.
+const matchBots = new Map<string, Map<string, BotState>>();
+const isBotControlled = (match: Match, playerId: string) => matchBots.get(match.id)?.has(playerId) ?? false;
+const isBotSeat = (playerId: string) => playerId.startsWith("bot_");
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -281,11 +288,18 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
     { id: b.id, username: b.data.username, loadout: loadoutB },
   );
 
-  a.join(matchId);
-  b.join(matchId);
+  launchMatch(match, [a, b], tournament);
+}
+
+/** Registers a created match, tells its human players, and starts the game loop. */
+function launchMatch(match: Match, sockets: Socket[], tournament?: WeeklyTournamentConfig): void {
+  const matchId = match.id;
+  const mode = match.mode;
+  for (const s of sockets) {
+    s.join(matchId);
+    playerMatch.set(s.id, matchId);
+  }
   matches.set(matchId, match);
-  playerMatch.set(a.id, matchId);
-  playerMatch.set(b.id, matchId);
 
   const roomPlayers = match.players.map((p) => ({ id: p.id, username: p.username, number: p.number }));
   for (const p of match.players) {
@@ -300,6 +314,10 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
       tickRate: TICK_RATE,
       winningScore: WINNING_SCORE,
       field: { width: FIELD_WIDTH, height: FIELD_HEIGHT },
+      // Practice match info; null in normal matches
+      ai: matchBots.has(matchId)
+        ? { opponent: isBotControlled(match, getOpponent(match, p.id)!.id), autoplay: isBotControlled(match, p.id) }
+        : null,
     });
     if (tournament) {
       io.to(p.id).emit("tournament_match_start", {
@@ -310,7 +328,11 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
     debugLog("room", `socket ${p.id} (${p.username}) placed in room ${matchId} as Player ${p.number}`);
   }
 
-  console.log(`[${matchId}] started (${mode}): ${a.data.username} vs ${b.data.username} (${formatClock(MATCH_DURATION_MS)}, ${TICK_RATE} ticks/s)`);
+  const [first, second] = match.players;
+  const practice = matchBots.has(matchId) ? ", practice vs AI" : "";
+  console.log(
+    `[${matchId}] started (${mode}${practice}): ${first.username} vs ${second.username} (${formatClock(MATCH_DURATION_MS)}, ${TICK_RATE} ticks/s)`,
+  );
   const source = tournament ? `WeeklyTournamentConfig "${tournament.id}" (saved loadouts ignored)` : "saved database loadouts";
   console.log(`[${matchId}] loadouts from ${source}:`);
   for (const p of match.players) {
@@ -340,6 +362,16 @@ function runDueTicks(match: Match): void {
 
 function gameTick(match: Match): void {
   match.tick++;
+
+  // Computer-controlled seats decide before the simulation step, like a spawn_request would
+  const bots = matchBots.get(match.id);
+  if (bots) {
+    for (const p of match.players) {
+      const brain = bots.get(p.id);
+      const unit = brain && botTick(match, p, brain);
+      if (unit) debugLog("bot", `P${p.number} ${p.username} (AI) spawned ${unit.cardId} ${unit.id} at x ${unit.x.toFixed(0)}`);
+    }
+  }
 
   // Mana regen, combat, movement, endzone scoring
   const events = stepMatch(match);
@@ -437,6 +469,7 @@ function endMatch(match: Match, reason: GameOverReason, forfeitedBy?: string): v
   match.ended = true;
   clearInterval(match.interval);
   matches.delete(match.id);
+  const practice = matchBots.delete(match.id);
 
   for (const p of match.players) {
     playerMatch.delete(p.id);
@@ -450,7 +483,8 @@ function endMatch(match: Match, reason: GameOverReason, forfeitedBy?: string): v
       `(P1 ${p1.score} - ${p2.score} P2) after ${match.tick} ticks`,
   );
 
-  const recipients = match.players.filter((p) => p.id !== forfeitedBy);
+  // Bot seats have no socket and no account, so they get neither results nor rewards
+  const recipients = match.players.filter((p) => p.id !== forfeitedBy && !isBotSeat(p.id));
   for (const p of recipients) {
     const opponent = getOpponent(match, p.id)!;
     io.to(p.id).emit("game_over", {
@@ -460,7 +494,15 @@ function endMatch(match: Match, reason: GameOverReason, forfeitedBy?: string): v
       reason,
       finalScore: { you: p.score, opponent: opponent.score },
       opponentName: opponent.username,
+      practice, // practice matches vs the AI give no rewards
     });
+  }
+
+  if (practice) {
+    for (const p of recipients) {
+      io.to(p.id).emit("match_results", { matchId: match.id, result: resultFor(p, winner), rewards: null, rewardsSaved: true });
+    }
+    return;
   }
 
   void grantRewards(match, recipients, winner);
@@ -507,6 +549,47 @@ async function grantRewards(match: Match, recipients: PlayerState[], winner: Pla
   );
 }
 
+/**
+ * A practice match against the computer, starting straight away. The player
+ * uses their saved deck; the bot uses the starter hand with no augments.
+ * With autoplay, a bot plays the player's side as well (AI vs AI to watch).
+ */
+async function startBotMatch(socket: Socket, autoplay: boolean): Promise<void> {
+  if (playerMatch.has(socket.id) || pairing.has(socket.id) || queuedIn.has(socket.id)) {
+    socket.emit("queue_error", { message: "Already in a match or queue" });
+    return;
+  }
+
+  pairing.add(socket.id);
+  let loadout: Loadout;
+  try {
+    loadout = await withTimeout(
+      getMatchLoadout(socket.data.username),
+      LOADOUT_LOOKUP_TIMEOUT_MS,
+      EMPTY_LOADOUT,
+      `loadout ${socket.data.username}`,
+    );
+  } finally {
+    pairing.delete(socket.id);
+  }
+  if (!io.sockets.sockets.get(socket.id)) return; // left while the deck was loading
+
+  const matchId = `match_${randomUUID().slice(0, 8)}`;
+  const botId = `bot_${randomUUID().slice(0, 8)}`;
+  const match = createMatch(
+    matchId,
+    "standard",
+    { id: socket.id, username: socket.data.username, loadout },
+    { id: botId, username: "AI Bot", loadout: EMPTY_LOADOUT },
+  );
+
+  const brains = new Map<string, BotState>([[botId, createBot()]]);
+  if (autoplay) brains.set(socket.id, createBot());
+  matchBots.set(matchId, brains);
+
+  launchMatch(match, [socket]);
+}
+
 // ---------------------------------------------------------------------------
 // Socket events
 // ---------------------------------------------------------------------------
@@ -517,6 +600,9 @@ io.on("connection", (socket) => {
 
   socket.on("join_queue", () => joinQueue(socket, "standard"));
   socket.on("join_tournament_queue", () => joinQueue(socket, "tournament"));
+  socket.on("join_bot_match", (payload: { autoplay?: unknown } | undefined) => {
+    void startBotMatch(socket, payload?.autoplay === true);
+  });
 
   socket.on("leave_queue", () => {
     if (removeFromQueue(socket.id)) {

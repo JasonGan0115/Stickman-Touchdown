@@ -49,6 +49,12 @@ export interface TournamentInfo {
   augments: { id: string; name: string; rarity: string }[];
 }
 
+/** Set for practice matches against the computer. */
+export interface AiMatchInfo {
+  opponent: boolean; // the other seat is the AI
+  autoplay: boolean; // the AI is also playing your side (AI vs AI, to watch)
+}
+
 export interface Score {
   you: number;
   opponent: number;
@@ -69,6 +75,7 @@ export interface GameOverInfo {
   reason: 'score_limit' | 'time_up' | 'forfeit' | 'debug_force_win';
   finalScore: Score;
   opponentName: string;
+  practice?: boolean; // vs the AI: no rewards
 }
 
 /** Sent once rewards have been written to the database ('match_results'). */
@@ -86,6 +93,7 @@ export interface MatchStartInfo {
   loadout: Loadout;
   hand: HandCard[];
   boosts: string[];
+  ai: AiMatchInfo | null;
   durationMs: number;
 }
 
@@ -112,6 +120,7 @@ export interface GameState {
   hand: HandCard[];
   selectedCardId: string | null; // the card a tap in the endzone will spawn
   boosts: string[]; // this player's augment effects for the match, e.g. "+10% unit health"
+  ai: AiMatchInfo | null; // practice match vs the computer; kept after game over for "Play Again"
   tournament: TournamentInfo | null;
 
   // Live state (from state_update, 30x per second)
@@ -154,6 +163,7 @@ const initialMatchState = {
   hand: [] as HandCard[],
   selectedCardId: null as string | null,
   boosts: [] as string[],
+  ai: null as AiMatchInfo | null,
   tournament: null,
   matchTimer: 0,
   mana: 0,
@@ -180,7 +190,7 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
         : { isConnected, localSocketId: null, ...initialMatchState },
     ),
   setQueued: (queueMode) => set({ ...initialMatchState, matchStatus: 'queued', queueMode }),
-  startMatch: ({ roomID, mode, roomPlayers, loadout, hand, boosts, durationMs }) =>
+  startMatch: ({ roomID, mode, roomPlayers, loadout, hand, boosts, ai, durationMs }) =>
     set({
       ...initialMatchState,
       matchStatus: 'in_match',
@@ -190,6 +200,7 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
       loadout,
       hand,
       boosts,
+      ai,
       selectedCardId: hand[0]?.cardId ?? null,
       matchTimer: durationMs,
     }),

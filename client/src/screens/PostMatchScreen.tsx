@@ -36,6 +36,7 @@ interface Props {
 export function PostMatchScreen({ store, service, compact = false }: Props) {
   const gameOver = useStore(store, (s) => s.gameOver);
   const results = useStore(store, (s) => s.matchResults);
+  const ai = useStore(store, (s) => s.ai);
   if (!gameOver) return null;
 
   const { title, color } = RESULT_STYLE[gameOver.result];
@@ -51,7 +52,9 @@ export function PostMatchScreen({ store, service, compact = false }: Props) {
       <Text style={styles.vs}>vs {gameOver.opponentName}</Text>
 
       <View style={styles.rewards}>
-        {gameOver.result === 'draw' ? (
+        {gameOver.practice ? (
+          <Text style={styles.note}>Practice match vs AI: no rewards.</Text>
+        ) : gameOver.result === 'draw' ? (
           <Text style={styles.note}>No rewards for a draw.</Text>
         ) : !results ? (
           // 'game_over' arrives instantly; rewards follow once the database writes finish
@@ -87,7 +90,7 @@ export function PostMatchScreen({ store, service, compact = false }: Props) {
       <View style={styles.buttons}>
         <Pressable
           style={({ pressed }) => [styles.button, pressed && styles.dimmed]}
-          onPress={() => service.joinQueue(gameOver.mode)}
+          onPress={() => (ai ? service.playVsAi(ai.autoplay) : service.joinQueue(gameOver.mode))}
         >
           <Text style={styles.buttonText}>Play Again</Text>
         </Pressable>

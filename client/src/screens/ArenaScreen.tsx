@@ -220,6 +220,7 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
   const enemyScore = useStore(store, (s) => s.score.opponent);
   const opponentName = useStore(store, (s) => selectOpponent(s)?.username ?? 'ENEMY');
   const tournamentName = useStore(store, (s) => (s.mode === 'tournament' ? (s.tournament?.name ?? 'Weekly Tournament') : null));
+  const aiLabel = useStore(store, (s) => (!s.ai ? null : s.ai.autoplay ? 'AI VS AI · WATCHING' : 'PRACTICE VS AI'));
 
   return (
     <View style={styles.hud}>
@@ -233,6 +234,11 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
           </Text>
         </View>
       </View>
+      {aiLabel && (
+        <View style={styles.aiBanner}>
+          <Text style={styles.aiBannerText}>{aiLabel}</Text>
+        </View>
+      )}
       {tournamentName && (
         <View style={styles.mirrorBanner}>
           <Text style={styles.mirrorTitle}>⚔ MIRROR MATCH</Text>
@@ -381,6 +387,8 @@ const styles = StyleSheet.create({
   mirrorBanner: { backgroundColor: '#ffb020', borderRadius: 10, paddingVertical: 3, paddingHorizontal: 12, alignItems: 'center' },
   mirrorTitle: { color: '#1a1200', fontSize: 13, fontWeight: '900', letterSpacing: 1.5 },
   mirrorSub: { color: '#1a1200', fontSize: 10, fontWeight: '700' },
+  aiBanner: { backgroundColor: '#534ab7', borderRadius: 10, paddingVertical: 3, paddingHorizontal: 12 },
+  aiBannerText: { color: '#eeedfe', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
 
   manaWrap: {
     position: 'absolute',
