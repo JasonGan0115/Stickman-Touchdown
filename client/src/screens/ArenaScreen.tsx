@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
 import { useStore } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 
 import { EffectsLayer } from '../components/EffectsLayer';
 import { Stickman } from '../components/Stickman';
-import { UnitSprite } from '../components/UnitSprite';
+import { LiveUnit } from '../components/UnitSprite';
 import { ENDZONE_DEPTH, FIELD_HEIGHT, FIELD_WIDTH, MAX_MANA } from '../game/constants';
 import type { SocketService } from '../services/SocketService';
 import { selectMe, selectOpponent, selectSelectedCard, type GameStore } from '../store/useGameStore';
@@ -19,6 +20,10 @@ const COLORS = {
   enemyUnit: '#e0262b', // red
   mana: '#b14cff',
 };
+
+// Logs every tap's screen/world coordinates to Metro. Handy for debugging the
+// rotated Player 2 view, but slow when spamming taps, so it's off by default.
+const LOG_TAPS = false;
 
 const ENDZONE_PCT = `${(ENDZONE_DEPTH / FIELD_HEIGHT) * 100}%` as const;
 
@@ -86,11 +91,11 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
     const worldY = flipped ? FIELD_HEIGHT - screenY : screenY;
 
     const tag = `[arena${compact ? ':debug' : ''}] P${myNumber ?? '?'} view=${flipped ? 'ROTATED 180°' : 'normal'}`;
-    console.log(
+    if (LOG_TAPS) console.log(
       `${tag} BEFORE: tap at screen px (${locationX.toFixed(1)}, ${locationY.toFixed(1)}) ` +
         `= (${screenX.toFixed(1)}, ${screenY.toFixed(1)}) of ${FIELD_WIDTH}x${FIELD_HEIGHT} as seen on screen`,
     );
-    console.log(
+    if (LOG_TAPS) console.log(
       `${tag} AFTER:  world (${worldX.toFixed(1)}, ${worldY.toFixed(1)}) -> spawn_request ` +
         `(server map: ${worldY < FIELD_HEIGHT / 2 ? 'TOP' : 'BOTTOM'} half)`,
     );
@@ -103,7 +108,7 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
       return;
     }
     if (screenY < FIELD_HEIGHT - ENDZONE_DEPTH) {
-      console.log(`${tag} not sent: tap was outside the bottom endzone on screen`);
+      if (LOG_TAPS) console.log(`${tag} not sent: tap was outside the bottom endzone on screen`);
       state.setSpawnError('Tap inside your endzone to spawn');
       return;
     }
@@ -185,32 +190,41 @@ const FieldStripes = memo(function FieldStripes() {
   );
 });
 
-/** Renders every unit at its world position. Re-renders each tick, so it's kept separate from the HUD. */
+/**
+ * One LiveUnit per unit on the field. This only re-renders when units appear
+ * or disappear; each unit follows its own position and health from the store.
+ */
 function EntityLayer({ store, scale, flipped }: { store: GameStore; scale: number; flipped: boolean }) {
-  const entities = useStore(store, (s) => s.entities);
+  // "id:owner" pairs; useShallow keeps the array stable while the same units are on the field
+  const units = useStore(store, useShallow((s) => s.entities.map((e) => `${e.id}:${e.ownerId}`)));
   const localSocketId = useStore(store, (s) => s.localSocketId);
 
   return (
     <View style={styles.overlay}>
-      {entities.map((e) => (
-        <UnitSprite
-          key={e.id}
-          left={e.x * scale}
-          top={e.y * scale}
-          // Your units are blue and the opponent's red, matching your blue home
-          // endzone and red enemy endzone. For Player 1 this is Player 1 = blue.
-          color={e.ownerId === localSocketId ? COLORS.myUnit : COLORS.enemyUnit}
-          mine={e.ownerId === localSocketId}
-          type={e.type}
-          health={e.health}
-          maxHealth={e.maxHealth}
-          attacking={e.state === 'attacking'}
-          lastHitTick={e.lastHitTick}
-          boardFlipped={flipped}
-        />
-      ))}
+      {units.map((key) => {
+        const [id, ownerId] = splitUnitKey(key);
+        const mine = ownerId === localSocketId;
+        return (
+          <LiveUnit
+            key={id}
+            store={store}
+            id={id}
+            scale={scale}
+            // Your units are blue and the opponent's red, matching your blue home
+            // endzone and red enemy endzone. For Player 1 this is Player 1 = blue.
+            color={mine ? COLORS.myUnit : COLORS.enemyUnit}
+            mine={mine}
+            boardFlipped={flipped}
+          />
+        );
+      })}
     </View>
   );
+}
+
+function splitUnitKey(key: string): [string, string] {
+  const i = key.indexOf(':');
+  return [key.slice(0, i), key.slice(i + 1)];
 }
 
 function Hud({ store, compact }: { store: GameStore; compact: boolean }) {

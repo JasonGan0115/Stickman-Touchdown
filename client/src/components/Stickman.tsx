@@ -1,7 +1,8 @@
 import { memo, useEffect, type ReactNode } from 'react';
+import { StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
-  useAnimatedProps,
+  useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withSequence,
@@ -12,8 +13,10 @@ import Svg, { Circle, Line, Path } from 'react-native-svg';
 
 import type { UnitType } from '../store/useGameStore';
 
-const ALine = Animated.createAnimatedComponent(Line);
-const ACircle = Animated.createAnimatedComponent(Circle);
+// Performance: the drawings are never redrawn while a unit moves. The body is
+// one still SVG, and the legs and weapon arm are separate pieces that are
+// only rotated (a cheap transform on the UI thread), so dozens of units can
+// walk and fight at once.
 
 // Drawn in a 100x100 box. The figure faces right; the caller mirrors it for the enemy.
 const BODY = '#f4f6fb';
@@ -100,65 +103,56 @@ const DESIGNS: Record<UnitType, Design> = {
   },
 };
 
-/** Rotates (px, py) around (ox, oy) by deg degrees. */
-function rotate(px: number, py: number, ox: number, oy: number, deg: number) {
-  'worklet';
-  const r = (deg * Math.PI) / 180;
-  const c = Math.cos(r);
-  const s = Math.sin(r);
-  const dx = px - ox;
-  const dy = py - oy;
-  return { x: ox + dx * c - dy * s, y: oy + dx * s + dy * c };
-}
-
-function Leg({ phase, direction, width }: { phase: SharedValue<number>; direction: 1 | -1; width: number }) {
-  const props = useAnimatedProps(() => {
-    const a = (phase.value * LEG_SWING_DEG * direction * Math.PI) / 180;
-    return { x2: HIP.x + Math.sin(a) * LEG_LENGTH, y2: HIP.y + Math.cos(a) * LEG_LENGTH };
-  });
+function Leg({ phase, direction, design, k }: { phase: SharedValue<number>; direction: 1 | -1; design: Design; k: number }) {
+  const w = design.lineWidth * k;
+  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${phase.value * LEG_SWING_DEG * direction}deg` }] }));
   return (
-    <ALine
-      x1={HIP.x}
-      y1={HIP.y}
-      x2={HIP.x}
-      y2={HIP.y + LEG_LENGTH}
-      animatedProps={props}
-      stroke={BODY}
-      strokeWidth={width}
-      strokeLinecap="round"
+    <Animated.View
+      style={[
+        styles.leg,
+        {
+          left: HIP.x * k - w / 2,
+          top: HIP.y * k - w / 2,
+          width: w,
+          height: (LEG_LENGTH + design.lineWidth) * k,
+          borderRadius: w / 2,
+          transformOrigin: `${w / 2}px ${w / 2}px`,
+        },
+        style,
+      ]}
     />
   );
 }
 
-function ArmSegment({ seg, swing, design, team }: { seg: Seg; swing: SharedValue<number>; design: Design; team: string }) {
-  const { x, y } = design.shoulder;
-  const props = useAnimatedProps(() => {
-    const a = rotate(seg.x1, seg.y1, x, y, swing.value);
-    const b = rotate(seg.x2, seg.y2, x, y, swing.value);
-    return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
-  });
-  const color = seg.color === 'team' ? team : (seg.color ?? BODY);
+/** The weapon arm and what it holds: drawn once, then rotated around the shoulder on each hit. */
+function WeaponArm({ swing, design, team, size }: { swing: SharedValue<number>; design: Design; team: string; size: number }) {
+  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${swing.value}deg` }] }));
+  const { orb } = design;
   return (
-    <ALine
-      x1={seg.x1}
-      y1={seg.y1}
-      x2={seg.x2}
-      y2={seg.y2}
-      animatedProps={props}
-      stroke={color}
-      strokeWidth={seg.width ?? design.lineWidth}
-      strokeLinecap={seg.width && seg.width > 8 ? 'butt' : 'round'}
-    />
+    <Animated.View
+      style={[
+        StyleSheet.absoluteFill,
+        { transformOrigin: `${design.shoulder.x}% ${design.shoulder.y}%` },
+        style,
+      ]}
+    >
+      <Svg width={size} height={size} viewBox="0 0 100 100">
+        {design.arm.map((seg, i) => (
+          <Line
+            key={i}
+            x1={seg.x1}
+            y1={seg.y1}
+            x2={seg.x2}
+            y2={seg.y2}
+            stroke={seg.color === 'team' ? team : (seg.color ?? BODY)}
+            strokeWidth={seg.width ?? design.lineWidth}
+            strokeLinecap={seg.width && seg.width > 8 ? 'butt' : 'round'}
+          />
+        ))}
+        {orb && <Circle cx={orb.x} cy={orb.y} r={orb.r} fill="#afa9ec" stroke="#cecbf6" strokeWidth={2} />}
+      </Svg>
+    </Animated.View>
   );
-}
-
-function Orb({ orb, swing, design }: { orb: NonNullable<Design['orb']>; swing: SharedValue<number>; design: Design }) {
-  const { x, y } = design.shoulder;
-  const props = useAnimatedProps(() => {
-    const p = rotate(orb.x, orb.y, x, y, swing.value);
-    return { cx: p.x, cy: p.y };
-  });
-  return <ACircle cx={orb.x} cy={orb.y} r={orb.r} animatedProps={props} fill="#afa9ec" stroke="#cecbf6" strokeWidth={2} />;
 }
 
 interface Props {
@@ -177,6 +171,7 @@ function StickmanBase({ type, teamColor, size, walking = false, attackTick = -1,
   const design = DESIGNS[type];
   const phase = useSharedValue(0); // -1..1, leg swing
   const swing = useSharedValue(0); // degrees, weapon arm
+  const k = size / 100;
 
   useEffect(() => {
     if (!animated) return;
@@ -198,20 +193,23 @@ function StickmanBase({ type, teamColor, size, walking = false, attackTick = -1,
 
   const w = design.lineWidth;
   return (
-    <Svg width={size} height={size} viewBox="0 0 100 100">
-      <Leg phase={phase} direction={1} width={w} />
-      <Leg phase={phase} direction={-1} width={w} />
-      <Line x1={50} y1={24 + design.headR} x2={HIP.x} y2={HIP.y} stroke={BODY} strokeWidth={w} strokeLinecap="round" />
-      {/* Back arm */}
-      <Line x1={design.shoulder.x} y1={design.shoulder.y} x2={36} y2={54} stroke={BODY} strokeWidth={w} strokeLinecap="round" />
-      <Circle cx={50} cy={24} r={design.headR} fill={teamColor} stroke={BODY} strokeWidth={3} />
-      {design.extras?.(teamColor)}
-      {design.arm.map((seg, i) => (
-        <ArmSegment key={i} seg={seg} swing={swing} design={design} team={teamColor} />
-      ))}
-      {design.orb && <Orb orb={design.orb} swing={swing} design={design} />}
-    </Svg>
+    <View style={{ width: size, height: size }}>
+      <Leg phase={phase} direction={1} design={design} k={k} />
+      <Leg phase={phase} direction={-1} design={design} k={k} />
+      <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}>
+        <Line x1={50} y1={24 + design.headR} x2={HIP.x} y2={HIP.y} stroke={BODY} strokeWidth={w} strokeLinecap="round" />
+        {/* Back arm */}
+        <Line x1={design.shoulder.x} y1={design.shoulder.y} x2={36} y2={54} stroke={BODY} strokeWidth={w} strokeLinecap="round" />
+        <Circle cx={50} cy={24} r={design.headR} fill={teamColor} stroke={BODY} strokeWidth={3} />
+        {design.extras?.(teamColor)}
+      </Svg>
+      <WeaponArm swing={swing} design={design} team={teamColor} size={size} />
+    </View>
   );
 }
 
 export const Stickman = memo(StickmanBase);
+
+const styles = StyleSheet.create({
+  leg: { position: 'absolute', backgroundColor: BODY },
+});

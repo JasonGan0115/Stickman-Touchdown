@@ -4,7 +4,7 @@ import { useStore } from 'zustand';
 
 import { CASTER_SPLASH_RADIUS, type Effect } from '../game/effects';
 import type { GameStore } from '../store/useGameStore';
-import { UnitSprite } from './UnitSprite';
+import { DyingUnit } from './UnitSprite';
 
 const SHOT_MS = 170;
 
@@ -25,17 +25,11 @@ export function EffectsLayer({ store, scale, flipped, colorFor, localSocketId }:
         switch (e.kind) {
           case 'death':
             return (
-              <UnitSprite
+              <DyingUnit
                 key={e.id}
-                dying
-                left={e.entity.x * scale}
-                top={e.entity.y * scale}
+                entity={e.entity}
+                scale={scale}
                 color={colorFor(e.entity.ownerId)}
-                type={e.entity.type}
-                health={0}
-                maxHealth={e.entity.maxHealth}
-                attacking={false}
-                lastHitTick={-1}
                 mine={e.entity.ownerId === localSocketId}
                 boardFlipped={flipped}
               />

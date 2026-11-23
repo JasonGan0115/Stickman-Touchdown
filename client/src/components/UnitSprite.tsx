@@ -1,77 +1,159 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+  type SharedValue,
+} from 'react-native-reanimated';
+import { useStore } from 'zustand';
 
 import { SPRITE_SIZE, TICK_MS } from '../game/constants';
-import type { UnitType } from '../store/useGameStore';
+import type { Entity, GameStore, UnitType } from '../store/useGameStore';
 import { Stickman } from './Stickman';
 
-interface Props {
-  /** Centre of the unit, in pixels relative to the (unrotated) board */
-  left: number;
-  top: number;
+const HALF = SPRITE_SIZE / 2;
+
+interface Look {
   color: string;
+  /** Enemy units are mirrored so the two sides face each other */
+  mine: boolean;
+  /** The board is rotated 180°; the figure is turned back so it stays upright */
+  boardFlipped: boolean;
+}
+
+/**
+ * A live unit on the field. Performance: it does NOT re-render on every server
+ * tick. Its position is fed straight from the store into shared values (the
+ * glide runs on the UI thread), and React only re-renders it when something
+ * visible changes: health, fighting or not, or a new hit.
+ */
+function LiveUnitBase({ store, id, scale, ...look }: Look & { store: GameStore; id: string; scale: number }) {
+  // Snapshot at spawn: start position, and maxHealth (which never changes)
+  const [first] = useState(() => findUnit(store.getState().entities, id));
+  const x = useSharedValue((first?.x ?? 0) * scale - HALF);
+  const y = useSharedValue((first?.y ?? 0) * scale - HALF);
+
+  useEffect(() => {
+    let lastX = NaN;
+    let lastY = NaN;
+    const follow = (entities: Entity[]) => {
+      const e = findUnit(entities, id);
+      if (!e || (e.x === lastX && e.y === lastY)) return;
+      lastX = e.x;
+      lastY = e.y;
+      // Glide to the new position over one tick instead of jumping
+      const glide = { duration: TICK_MS, easing: Easing.linear };
+      x.value = withTiming(e.x * scale - HALF, glide);
+      y.value = withTiming(e.y * scale - HALF, glide);
+    };
+    follow(store.getState().entities);
+    return store.subscribe((s, prev) => {
+      if (s.entities !== prev.entities) follow(s.entities);
+    });
+  }, [store, id, scale, x, y]);
+
+  const type = useStore(store, (s) => findUnit(s.entities, id)?.type ?? first?.type ?? 'Melee');
+  const health = useStore(store, (s) => findUnit(s.entities, id)?.health ?? 0);
+  const maxHealth = first?.maxHealth ?? 1;
+  const attacking = useStore(store, (s) => findUnit(s.entities, id)?.state === 'attacking');
+  const lastHitTick = useStore(store, (s) => findUnit(s.entities, id)?.lastHitTick ?? -1);
+
+  return (
+    <UnitBody
+      x={x}
+      y={y}
+      type={type}
+      health={health}
+      maxHealth={maxHealth}
+      attacking={attacking}
+      lastHitTick={lastHitTick}
+      {...look}
+    />
+  );
+}
+
+export const LiveUnit = memo(LiveUnitBase);
+
+/** A unit that just died: falls over and fades where it stood. */
+function DyingUnitBase({ entity, scale, ...look }: Look & { entity: Entity; scale: number }) {
+  const x = useSharedValue(entity.x * scale - HALF);
+  const y = useSharedValue(entity.y * scale - HALF);
+  return (
+    <UnitBody
+      dying
+      x={x}
+      y={y}
+      type={entity.type}
+      health={0}
+      maxHealth={entity.maxHealth}
+      attacking={false}
+      lastHitTick={-1}
+      {...look}
+    />
+  );
+}
+
+export const DyingUnit = memo(DyingUnitBase);
+
+interface BodyProps extends Look {
+  x: SharedValue<number>; // top-left, px on the (unrotated) board
+  y: SharedValue<number>;
   type: UnitType;
   health: number;
   maxHealth: number;
   attacking: boolean;
   lastHitTick: number;
-  /** Enemy units are mirrored so the two sides face each other */
-  mine: boolean;
-  /** The board is rotated 180°; the figure is turned back so it stays upright */
-  boardFlipped: boolean;
-  /** Plays the fall-over-and-fade animation instead of walking (for units that just died) */
   dying?: boolean;
 }
 
-/**
- * A stickman unit. The server sends a new position every tick (~33ms); instead
- * of jumping, the unit glides to each new position over one tick on the native
- * thread, so motion stays smooth even if a packet arrives a little late.
- */
-function UnitSpriteBase({ left, top, color, type, health, maxHealth, attacking, lastHitTick, mine, boardFlipped, dying = false }: Props) {
-  // Created once per unit (lazy useState initializer); Animated values are mutated
-  // by the animation driver, never replaced, so they don't trigger re-renders.
-  const [position] = useState(() => new Animated.ValueXY({ x: left - SPRITE_SIZE / 2, y: top - SPRITE_SIZE / 2 }));
-  const [scale] = useState(() => new Animated.Value(dying ? 1 : 0));
-  const [flash] = useState(() => new Animated.Value(1));
-  const [fall] = useState(() => new Animated.Value(0));
+const UnitBody = memo(function UnitBody({
+  x,
+  y,
+  type,
+  health,
+  maxHealth,
+  attacking,
+  lastHitTick,
+  color,
+  mine,
+  boardFlipped,
+  dying = false,
+}: BodyProps) {
+  const pop = useSharedValue(dying ? 1 : 0);
+  const flash = useSharedValue(1);
+  const fall = useSharedValue(0);
   const lastHealth = useRef(health);
 
   // Pop in when spawned, or fall over and fade when dying
   useEffect(() => {
-    if (dying) {
-      Animated.timing(fall, { toValue: 1, duration: 550, easing: Easing.in(Easing.quad), useNativeDriver: true }).start();
-    } else {
-      Animated.spring(scale, { toValue: 1, friction: 5, tension: 160, useNativeDriver: true }).start();
-    }
-  }, [dying, fall, scale]);
-
-  useEffect(() => {
-    if (dying) return;
-    Animated.timing(position, {
-      toValue: { x: left - SPRITE_SIZE / 2, y: top - SPRITE_SIZE / 2 },
-      duration: TICK_MS,
-      easing: Easing.linear,
-      useNativeDriver: true,
-    }).start();
-  }, [left, top, position, dying]);
+    if (dying) fall.value = withTiming(1, { duration: 550, easing: Easing.in(Easing.quad) });
+    else pop.value = withSpring(1, { damping: 9, stiffness: 220 });
+  }, [dying, fall, pop]);
 
   // Blink when hit
   useEffect(() => {
-    if (health < lastHealth.current) {
-      flash.setValue(0.25);
-      Animated.timing(flash, { toValue: 1, duration: 220, useNativeDriver: true }).start();
-    }
+    if (health < lastHealth.current) flash.value = withSequence(withTiming(0.25, { duration: 0 }), withTiming(1, { duration: 220 }));
     lastHealth.current = health;
   }, [health, flash]);
 
+  const outer = useAnimatedStyle(() => ({
+    opacity: fall.value < 0.6 ? 1 - fall.value / 3 : 0.8 * (1 - (fall.value - 0.6) / 0.4),
+    transform: [{ translateX: x.value }, { translateY: y.value }, { scale: pop.value }],
+  }));
+  const figure = useAnimatedStyle(() => ({
+    opacity: flash.value,
+    transform: [{ rotate: `${fall.value * (mine ? -90 : 90)}deg` }],
+  }));
+
   const healthPct = Math.max(0, Math.min(1, health / maxHealth));
   const healthColor = healthPct > 0.5 ? '#3ddc84' : healthPct > 0.25 ? '#ffb020' : '#ff4d4d';
-  const fallRotate = fall.interpolate({ inputRange: [0, 1], outputRange: ['0deg', mine ? '-90deg' : '90deg'] });
-  const fallOpacity = fall.interpolate({ inputRange: [0, 0.6, 1], outputRange: [1, 0.8, 0] });
 
   return (
-    <Animated.View style={[styles.unit, { opacity: fallOpacity, transform: [{ translateX: position.x }, { translateY: position.y }, { scale }] }]}>
+    <Animated.View style={[styles.unit, outer]}>
       {/* Undo the board's 180° turn so the figure and its health bar read upright */}
       <View style={[styles.fill, boardFlipped && styles.upright]}>
         {!dying && (
@@ -80,17 +162,26 @@ function UnitSpriteBase({ left, top, color, type, health, maxHealth, attacking, 
           </View>
         )}
         {attacking && !dying && <View style={styles.attackRing} />}
-        <Animated.View style={[styles.fill, { opacity: flash, transform: [{ rotate: fallRotate }] }]}>
+        <Animated.View style={[styles.fill, figure]}>
           <View style={[styles.fill, !mine && styles.mirrored]}>
-            <Stickman type={type} teamColor={color} size={SPRITE_SIZE} walking={!attacking && !dying} attackTick={dying ? -1 : lastHitTick} />
+            <Stickman
+              type={type}
+              teamColor={color}
+              size={SPRITE_SIZE}
+              walking={!attacking && !dying}
+              attackTick={dying ? -1 : lastHitTick}
+            />
           </View>
         </Animated.View>
       </View>
     </Animated.View>
   );
-}
+});
 
-export const UnitSprite = memo(UnitSpriteBase);
+function findUnit(entities: Entity[], id: string): Entity | undefined {
+  for (const e of entities) if (e.id === id) return e;
+  return undefined;
+}
 
 const styles = StyleSheet.create({
   unit: { position: 'absolute', left: 0, top: 0, width: SPRITE_SIZE, height: SPRITE_SIZE, pointerEvents: 'none' },
