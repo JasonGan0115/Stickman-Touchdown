@@ -42,7 +42,9 @@ import { playerRouter } from "./routes/player";
 // Config
 // ---------------------------------------------------------------------------
 
-const PORT = Number(process.env.PORT) || 3000;
+// 3100, not 3000: Grafana and many dev tools already default to 3000.
+// Keep in sync with SERVER_PORT in client/src/services/SocketService.ts.
+const PORT = Number(process.env.PORT) || 3100;
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 // Verbose debug logs: on by default in development, off in production.
 // DEBUG_LOGS=true / DEBUG_LOGS=false overrides either way.

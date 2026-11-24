@@ -17,7 +17,7 @@ import {
   type TournamentInfo,
 } from '../store/useGameStore';
 
-const SERVER_PORT = 3000;
+const SERVER_PORT = 3100; // the game server's port; matches PORT in server/src/index.ts
 
 // "localhost" on a phone or emulator means the phone itself, not your computer.
 // In development, Expo knows the LAN address of the machine running Metro
