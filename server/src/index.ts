@@ -16,6 +16,7 @@ import {
 } from "./game/constants";
 import {
   addUnit,
+  applyAugment,
   createMatch,
   getLeader,
   getOpponent,
@@ -32,9 +33,10 @@ import {
 } from "./game/match";
 import { grantMatchReward, REWARD_PACKAGES, type PlayerReward } from "./game/rewards";
 import { getWeeklyTournamentConfig, type WeeklyTournamentConfig } from "./game/tournament";
-import { describeModifiers } from "./game/augments";
+import { describeModifiers, getDraftOptions } from "./game/augments";
+import { getAIBonus } from "./game/ai";
 import { botTick, createBot, type BotState } from "./game/bot";
-import { DEFAULT_HAND, getUnitStats, handCardInfo } from "./game/units";
+import { DEFAULT_HAND, getUnitStats, handCardInfo, resolveDeck, sampleRandomCards } from "./game/units";
 import { EMPTY_LOADOUT, getMatchLoadout, USERNAME_PATTERN } from "./players";
 import { playerRouter } from "./routes/player";
 
@@ -111,6 +113,7 @@ const playerMatch = new Map<string, string>(); // socket id -> matchId
 // A bot seat's id is "bot_..." with no socket behind it; with autoplay the
 // human's own seat gets a bot brain too, so they can watch AI vs AI.
 const matchBots = new Map<string, Map<string, BotState>>();
+const matchAiDifficulty = new Map<string, number>();
 const isBotControlled = (match: Match, playerId: string) => matchBots.get(match.id)?.has(playerId) ?? false;
 const isBotSeat = (playerId: string) => playerId.startsWith("bot_");
 
@@ -305,12 +308,25 @@ function launchMatch(match: Match, sockets: Socket[], tournament?: WeeklyTournam
 
   const roomPlayers = match.players.map((p) => ({ id: p.id, username: p.username, number: p.number }));
   for (const p of match.players) {
+    const opponent = getOpponent(match, p.id)!;
+    const opponentDeck = resolveDeck(opponent.loadout.unitIds);
+    const opponentPreview = sampleRandomCards(opponentDeck, 4).map(handCardInfo);
+    const silverDraftOptions = getDraftOptions("silver", 3);
+
+    // Auto-pick for bot players
+    if (isBotControlled(match, p.id) && silverDraftOptions.length > 0) {
+      applyAugment(p, silverDraftOptions[0].id);
+    }
+
     io.to(p.id).emit("match_found", {
       matchId,
       mode,
       players: roomPlayers, // the client finds itself in here by socket id
       loadout: p.loadout,
-      hand: p.hand.map(handCardInfo), // the cards this player can spawn, with costs
+      hand: p.hand.map(handCardInfo), // the 4 active cards this player can spawn, with costs & movement
+      nextCard: p.drawQueue[0] ? handCardInfo(p.drawQueue[0]) : null, // preview of the next card in deck
+      opponentPreview, // 4 random cards revealed from opponent's deck
+      silverDraftOptions, // 3 Silver augments to choose from before kickoff
       boosts: describeModifiers(p.modifiers), // e.g. ["+10% unit health"]; opponent's are not sent
       durationMs: MATCH_DURATION_MS,
       tickRate: TICK_RATE,
@@ -318,7 +334,11 @@ function launchMatch(match: Match, sockets: Socket[], tournament?: WeeklyTournam
       field: { width: FIELD_WIDTH, height: FIELD_HEIGHT },
       // Practice match info; null in normal matches
       ai: matchBots.has(matchId)
-        ? { opponent: isBotControlled(match, getOpponent(match, p.id)!.id), autoplay: isBotControlled(match, p.id) }
+        ? {
+            opponent: isBotControlled(match, getOpponent(match, p.id)!.id),
+            autoplay: isBotControlled(match, p.id),
+            difficulty: matchAiDifficulty.get(matchId),
+          }
         : null,
     });
     if (tournament) {
@@ -379,11 +399,31 @@ function gameTick(match: Match): void {
   const events = stepMatch(match);
   logTickEvents(match, events);
 
+  // If a touchdown occurred, trigger comeback draft for the conceding player
+  if (events.roundReset && events.scored.length > 0 && !getScoreLimitWinner(match)) {
+    const scorer = events.scored[0].scorer;
+    const conceding = getOpponent(match, scorer.id);
+    if (conceding) {
+      const comebackOptions = getDraftOptions("gold_or_legendary", 3);
+      debugLog(match.id, `Touchdown comeback draft offered to P${conceding.number} ${conceding.username}`);
+      const socket = io.sockets.sockets.get(conceding.id);
+      if (socket) {
+        socket.emit("comeback_draft", {
+          options: comebackOptions,
+          reason: "conceded_touchdown",
+        });
+      } else if (isBotControlled(match, conceding.id) && comebackOptions.length > 0) {
+        applyAugment(conceding, comebackOptions[0].id);
+        debugLog(match.id, `Bot P${conceding.number} auto-picked comeback augment ${comebackOptions[0].name}`);
+      }
+    }
+  }
+
   // Derive remaining time from the wall clock rather than counting ticks:
   // setInterval drifts, so tick count alone would make the match run long.
   const timeRemainingMs = Math.max(0, match.endsAt - Date.now());
 
-  const recipients = broadcastState(match, timeRemainingMs, events.killed.map((e) => e.id));
+  const recipients = broadcastState(match, timeRemainingMs, events.killed.map((e) => e.id), events.roundReset);
 
   // Once per second (every TICK_RATE ticks): prove the loop is alive and who it's emitting to
   if (match.tick % TICK_RATE === 0) {
@@ -426,12 +466,13 @@ function logTickEvents(match: Match, events: TickEvents): void {
 }
 
 /** Sends each player their own view of the state (own mana, you/opponent score). Returns how many sockets received it. */
-function broadcastState(match: Match, timeRemainingMs: number, killedIds: string[] = []): number {
+function broadcastState(match: Match, timeRemainingMs: number, killedIds: string[] = [], roundReset = false): number {
   // Only what the client needs to draw; combat stats stay on the server
   const entities = match.entities.map((e) => ({
     id: e.id,
     cardId: e.cardId,
     type: e.type,
+    movement: e.movement,
     ownerId: e.ownerId,
     x: round(e.x, 2),
     y: round(e.y, 2),
@@ -452,6 +493,8 @@ function broadcastState(match: Match, timeRemainingMs: number, killedIds: string
       tick: match.tick,
       timeRemainingMs,
       mana: round(p.mana, 2), // opponent's mana is deliberately not sent
+      spawnCooldownRemainingMs: Math.max(0, Math.ceil((p.spawnCooldownTicks / TICK_RATE) * 1000)),
+      roundReset,
       score: { you: p.score, opponent: opponent.score },
       entities,
       killed: killedIds, // units that died this tick (the rest that vanished scored)
@@ -472,6 +515,7 @@ function endMatch(match: Match, reason: GameOverReason, forfeitedBy?: string): v
   clearInterval(match.interval);
   matches.delete(match.id);
   const practice = matchBots.delete(match.id);
+  matchAiDifficulty.delete(match.id);
 
   for (const p of match.players) {
     playerMatch.delete(p.id);
@@ -556,7 +600,7 @@ async function grantRewards(match: Match, recipients: PlayerState[], winner: Pla
  * uses their saved deck; the bot uses the starter hand with no augments.
  * With autoplay, a bot plays the player's side as well (AI vs AI to watch).
  */
-async function startBotMatch(socket: Socket, autoplay: boolean): Promise<void> {
+async function startBotMatch(socket: Socket, autoplay: boolean, difficulty?: number): Promise<void> {
   if (playerMatch.has(socket.id) || pairing.has(socket.id) || queuedIn.has(socket.id)) {
     socket.emit("queue_error", { message: "Already in a match or queue" });
     return;
@@ -576,20 +620,40 @@ async function startBotMatch(socket: Socket, autoplay: boolean): Promise<void> {
   }
   if (!io.sockets.sockets.get(socket.id)) return; // left while the deck was loading
 
+  const level =
+    typeof difficulty === "number" && Number.isFinite(difficulty)
+      ? Math.round(Math.min(100, Math.max(1, difficulty)))
+      : undefined;
+
   const matchId = `match_${randomUUID().slice(0, 8)}`;
   const botId = `bot_${randomUUID().slice(0, 8)}`;
+  const botName = level !== undefined ? `AI Bot (Lv.${level})` : "AI Bot";
   const match = createMatch(
     matchId,
     "standard",
     { id: socket.id, username: socket.data.username, loadout },
-    { id: botId, username: "AI Bot", loadout: EMPTY_LOADOUT },
+    { id: botId, username: botName, loadout: EMPTY_LOADOUT },
   );
 
-  const brains = new Map<string, BotState>([[botId, createBot()]]);
+  if (level !== undefined) {
+    matchAiDifficulty.set(matchId, level);
+  }
+
+  const brains = new Map<string, BotState>([[botId, createBot(level)]]);
   if (autoplay) brains.set(socket.id, createBot());
   matchBots.set(matchId, brains);
 
   launchMatch(match, [socket]);
+
+  if (level !== undefined) {
+    const bonus = getAIBonus(level);
+    const [humanPlayer, botPlayer] = match.players;
+    botPlayer.mana = bonus.startingLiquid;
+    botPlayer.modifiers.manaRegen *= bonus.manaRegenMultiplier;
+    if (!autoplay) {
+      humanPlayer.modifiers.damage *= 1 - bonus.damageDebuff;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -602,8 +666,9 @@ io.on("connection", (socket) => {
 
   socket.on("join_queue", () => joinQueue(socket, "standard"));
   socket.on("join_tournament_queue", () => joinQueue(socket, "tournament"));
-  socket.on("join_bot_match", (payload: { autoplay?: unknown } | undefined) => {
-    void startBotMatch(socket, payload?.autoplay === true);
+  socket.on("join_bot_match", (payload: { autoplay?: unknown; difficulty?: unknown } | undefined) => {
+    const difficulty = typeof payload?.difficulty === "number" ? payload.difficulty : undefined;
+    void startBotMatch(socket, payload?.autoplay === true, difficulty);
   });
 
   socket.on("leave_queue", () => {
@@ -629,15 +694,53 @@ io.on("connection", (socket) => {
         `P${player.number} ${socket.id} rejected: ${result.reason} (card ${String(payload?.cardId)}, mana ${player.mana.toFixed(2)}, ` +
           `x ${String(payload?.x)}, y ${String(payload?.y)})`,
       );
-      socket.emit("spawn_rejected", { reason: result.reason, mana: round(player.mana, 2), cost: result.cost });
+      socket.emit("spawn_rejected", {
+        reason: result.reason,
+        mana: round(player.mana, 2),
+        cost: result.cost,
+        cooldownRemainingMs: result.cooldownTicks ? Math.ceil((result.cooldownTicks / TICK_RATE) * 1000) : 0,
+      });
       return;
     }
 
-    const { entity, stats } = result;
+    const { entity, stats, hand, drawQueue } = result;
+    // Tell player their new hand rotation (Clash Royale cycle)
+    socket.emit("hand_update", {
+      hand: hand.map(handCardInfo),
+      nextCard: drawQueue[0] ? handCardInfo(drawQueue[0]) : null,
+    });
     debugLog(
       "spawn",
       `P${player.number} ${socket.id} spawned ${stats.name} ${entity.id} for ${stats.cost} mana at (${entity.x.toFixed(1)}, ${entity.y.toFixed(1)}), mana left ${player.mana.toFixed(2)}`,
     );
+  });
+
+  socket.on("draft_pick", ({ augmentId }: { augmentId?: unknown }) => {
+    const matchId = playerMatch.get(socket.id);
+    const match = matchId ? matches.get(matchId) : undefined;
+    const player = match ? getPlayer(match, socket.id) : undefined;
+    if (!match || match.ended || !player || typeof augmentId !== "string") return;
+
+    applyAugment(player, augmentId);
+    socket.emit("draft_confirmed", {
+      augmentId,
+      boosts: describeModifiers(player.modifiers),
+    });
+    debugLog("draft", `P${player.number} ${player.username} picked Silver augment ${augmentId}`);
+  });
+
+  socket.on("comeback_pick", ({ augmentId }: { augmentId?: unknown }) => {
+    const matchId = playerMatch.get(socket.id);
+    const match = matchId ? matches.get(matchId) : undefined;
+    const player = match ? getPlayer(match, socket.id) : undefined;
+    if (!match || match.ended || !player || typeof augmentId !== "string") return;
+
+    applyAugment(player, augmentId);
+    socket.emit("draft_confirmed", {
+      augmentId,
+      boosts: describeModifiers(player.modifiers),
+    });
+    debugLog("draft", `P${player.number} ${player.username} picked Comeback augment ${augmentId}`);
   });
 
   // TEMPORARY debug hook: ends the sender's match as a Player 1 win, with real rewards.

@@ -1,6 +1,9 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useStore } from 'zustand';
 
+import { AI_LEVEL_STORAGE_KEY, markAiLevelCleared } from '../services/aiProgress';
 import type { SocketService } from '../services/SocketService';
 import type { AugmentReward, GameOverInfo, GameStore } from '../store/useGameStore';
 
@@ -37,6 +40,18 @@ export function PostMatchScreen({ store, service, compact = false }: Props) {
   const gameOver = useStore(store, (s) => s.gameOver);
   const results = useStore(store, (s) => s.matchResults);
   const ai = useStore(store, (s) => s.ai);
+
+  const clearedAiLevel =
+    ai && !ai.autoplay && ai.difficulty !== undefined && gameOver?.result === 'victory'
+      ? ai.difficulty
+      : undefined;
+
+  useEffect(() => {
+    if (clearedAiLevel !== undefined) {
+      void markAiLevelCleared(clearedAiLevel);
+    }
+  }, [clearedAiLevel]);
+
   if (!gameOver) return null;
 
   const { title, color } = RESULT_STYLE[gameOver.result];
@@ -45,6 +60,11 @@ export function PostMatchScreen({ store, service, compact = false }: Props) {
     <View style={styles.container}>
       {gameOver.mode === 'tournament' && <Text style={styles.mode}>WEEKLY TOURNAMENT · MIRROR MATCH</Text>}
       <Text style={[styles.title, compact && styles.titleCompact, { color }]}>{title}</Text>
+      {clearedAiLevel !== undefined && (
+        <View style={styles.clearedBadge}>
+          <Text style={styles.clearedBadgeText}>✓ LEVEL {clearedAiLevel} CLEARED</Text>
+        </View>
+      )}
       <Text style={styles.reason}>{REASON_TEXT[gameOver.reason] ?? gameOver.reason}</Text>
       <Text style={styles.score}>
         {gameOver.finalScore.you} – {gameOver.finalScore.opponent}
@@ -88,9 +108,21 @@ export function PostMatchScreen({ store, service, compact = false }: Props) {
       </View>
 
       <View style={styles.buttons}>
+        {ai && !ai.autoplay && ai.difficulty !== undefined && gameOver.result === 'victory' && ai.difficulty < 100 && (
+          <Pressable
+            style={({ pressed }) => [styles.button, styles.nextLevel, pressed && styles.dimmed]}
+            onPress={() => {
+              const nextLevel = ai.difficulty! + 1;
+              AsyncStorage.setItem(AI_LEVEL_STORAGE_KEY, String(nextLevel)).catch(() => {});
+              service.playVsAi(false, nextLevel);
+            }}
+          >
+            <Text style={styles.buttonText}>Next: Lv.{ai.difficulty + 1}</Text>
+          </Pressable>
+        )}
         <Pressable
           style={({ pressed }) => [styles.button, pressed && styles.dimmed]}
-          onPress={() => (ai ? service.playVsAi(ai.autoplay) : service.joinQueue(gameOver.mode))}
+          onPress={() => (ai ? service.playVsAi(ai.autoplay, ai.difficulty) : service.joinQueue(gameOver.mode))}
         >
           <Text style={styles.buttonText}>Play Again</Text>
         </Pressable>
@@ -110,6 +142,16 @@ const styles = StyleSheet.create({
   mode: { color: '#ffb020', fontSize: 12, fontWeight: '900', letterSpacing: 1.5 },
   title: { fontSize: 52, fontWeight: '900', letterSpacing: 2 },
   titleCompact: { fontSize: 34 },
+  clearedBadge: {
+    backgroundColor: 'rgba(6, 214, 160, 0.16)',
+    borderWidth: 1,
+    borderColor: '#06d6a0',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    marginTop: 2,
+  },
+  clearedBadgeText: { color: '#06d6a0', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
   reason: { color: '#c9ccd4', fontSize: 15 },
   score: { color: '#fff', fontSize: 36, fontWeight: '800', fontVariant: ['tabular-nums'], marginTop: 4 },
   vs: { color: '#8a8f9c', fontSize: 14 },
@@ -123,7 +165,8 @@ const styles = StyleSheet.create({
   augmentMeta: { color: '#c9ccd4', fontSize: 13, marginTop: 2 },
   note: { color: '#c9ccd4', fontSize: 14, textAlign: 'center', maxWidth: 280 },
   buttons: { flexDirection: 'row', gap: 12 },
-  button: { backgroundColor: '#3b6cff', paddingVertical: 12, paddingHorizontal: 28, borderRadius: 14 },
+  button: { backgroundColor: '#3b6cff', paddingVertical: 12, paddingHorizontal: 22, borderRadius: 14 },
+  nextLevel: { backgroundColor: '#06d6a0' },
   secondary: { backgroundColor: '#3a3d46' },
   dimmed: { opacity: 0.6 },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },

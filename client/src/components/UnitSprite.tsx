@@ -12,7 +12,7 @@ import Animated, {
 import { useStore } from 'zustand';
 
 import { SPRITE_SIZE, TICK_MS } from '../game/constants';
-import type { Entity, GameStore, UnitType } from '../store/useGameStore';
+import type { Entity, GameStore, MovementType, UnitType } from '../store/useGameStore';
 import { Stickman } from './Stickman';
 
 const HALF = SPRITE_SIZE / 2;
@@ -57,6 +57,7 @@ function LiveUnitBase({ store, id, scale, ...look }: Look & { store: GameStore; 
   }, [store, id, scale, x, y]);
 
   const type = useStore(store, (s) => findUnit(s.entities, id)?.type ?? first?.type ?? 'Melee');
+  const movement = useStore(store, (s) => findUnit(s.entities, id)?.movement ?? first?.movement);
   const health = useStore(store, (s) => findUnit(s.entities, id)?.health ?? 0);
   const maxHealth = first?.maxHealth ?? 1;
   const attacking = useStore(store, (s) => findUnit(s.entities, id)?.state === 'attacking');
@@ -67,6 +68,7 @@ function LiveUnitBase({ store, id, scale, ...look }: Look & { store: GameStore; 
       x={x}
       y={y}
       type={type}
+      movement={movement}
       health={health}
       maxHealth={maxHealth}
       attacking={attacking}
@@ -88,6 +90,7 @@ function DyingUnitBase({ entity, scale, ...look }: Look & { entity: Entity; scal
       x={x}
       y={y}
       type={entity.type}
+      movement={entity.movement}
       health={0}
       maxHealth={entity.maxHealth}
       attacking={false}
@@ -103,6 +106,7 @@ interface BodyProps extends Look {
   x: SharedValue<number>; // top-left, px on the (unrotated) board
   y: SharedValue<number>;
   type: UnitType;
+  movement?: MovementType;
   health: number;
   maxHealth: number;
   attacking: boolean;
@@ -114,6 +118,7 @@ const UnitBody = memo(function UnitBody({
   x,
   y,
   type,
+  movement,
   health,
   maxHealth,
   attacking,
@@ -152,10 +157,14 @@ const UnitBody = memo(function UnitBody({
   const healthPct = Math.max(0, Math.min(1, health / maxHealth));
   const healthColor = healthPct > 0.5 ? '#3ddc84' : healthPct > 0.25 ? '#ffb020' : '#ff4d4d';
 
+  const isFlying = movement === 'flying';
+
   return (
     <Animated.View style={[styles.unit, outer]}>
+      {/* Flight elevation shadow */}
+      {isFlying && !dying && <View style={styles.flightShadow} />}
       {/* Undo the board's 180° turn so the figure and its health bar read upright */}
-      <View style={[styles.fill, boardFlipped && styles.upright]}>
+      <View style={[styles.fill, boardFlipped && styles.upright, isFlying && styles.flyingElevated]}>
         {!dying && (
           <View style={styles.healthTrack}>
             <View style={[styles.healthFill, { width: `${healthPct * 100}%`, backgroundColor: healthColor }]} />
@@ -166,6 +175,7 @@ const UnitBody = memo(function UnitBody({
           <View style={[styles.fill, !mine && styles.mirrored]}>
             <Stickman
               type={type}
+              movement={movement}
               teamColor={color}
               size={SPRITE_SIZE}
               walking={!attacking && !dying}
@@ -188,6 +198,16 @@ const styles = StyleSheet.create({
   fill: { width: SPRITE_SIZE, height: SPRITE_SIZE },
   upright: { transform: [{ rotate: '180deg' }] },
   mirrored: { transform: [{ scaleX: -1 }] },
+  flyingElevated: { transform: [{ translateY: -6 }] },
+  flightShadow: {
+    position: 'absolute',
+    bottom: -2,
+    left: SPRITE_SIZE * 0.25,
+    width: SPRITE_SIZE * 0.5,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
   attackRing: {
     position: 'absolute',
     left: SPRITE_SIZE * 0.2,

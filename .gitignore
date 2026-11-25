@@ -15,3 +15,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# Local Expo / browser / demo artifacts
+.expo/
+tmp_user_data/
+*.mp4
+*.webm

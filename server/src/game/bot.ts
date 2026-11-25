@@ -1,3 +1,4 @@
+import { getAIBonus, type AIBonus } from "./ai";
 import { ENDZONE_DEPTH, FIELD_HEIGHT, FIELD_WIDTH, TICK_RATE } from "./constants";
 import { trySpawn, type Entity, type Match, type PlayerState } from "./match";
 import { getUnitStats } from "./units";
@@ -16,6 +17,8 @@ export type Rng = () => number; // 0 <= n < 1
 export interface BotState {
   nextThinkTick: number;
   followUp: { cardId: string; x: number } | null; // e.g. an archer to go behind a tank
+  difficulty?: number;
+  bonus: AIBonus | null;
 }
 
 const THREAT_DISTANCE = 300; // world units from the bot's own goal line
@@ -23,14 +26,22 @@ const GROUP_RADIUS = 60;
 const LANES = [60, 180, 300];
 const ATTACK_MANA = 7; // what the bot saves up to before a big push
 
-export function createBot(): BotState {
-  return { nextThinkTick: TICK_RATE, followUp: null };
+export function createBot(difficulty?: number): BotState {
+  return {
+    nextThinkTick: TICK_RATE,
+    followUp: null,
+    difficulty,
+    bonus: difficulty !== undefined ? getAIBonus(difficulty) : null,
+  };
 }
 
 /** Called once per tick for a bot-controlled player. Returns the unit it spawned, if any. */
 export function botTick(match: Match, player: PlayerState, bot: BotState, rng: Rng = Math.random): Entity | null {
+  if (player.spawnCooldownTicks > 0) return null;
   if (match.tick < bot.nextThinkTick) return null;
-  bot.nextThinkTick = match.tick + Math.round(TICK_RATE * (0.4 + rng() * 0.6));
+  const minDelay = bot.bonus ? 0.25 : 0.4;
+  const maxExtra = bot.bonus ? 0.45 : 0.6;
+  bot.nextThinkTick = match.tick + Math.round(TICK_RATE * (minDelay + rng() * maxExtra));
 
   const enemies = match.entities.filter((e) => e.ownerId !== player.id);
 
@@ -46,30 +57,70 @@ export function botTick(match: Match, player: PlayerState, bot: BotState, rng: R
       : nearest.type === "Tank" ? ["card_archer", "card_battle_mage", "card_footsoldier"]
       : nearest.type === "Ranged" ? ["card_footsoldier", "card_shield_bearer"]
       : ["card_shield_bearer", "card_archer", "card_footsoldier"];
-    // Only defend with what it can afford right now; otherwise wait for mana
-    return spawnFirst(match, player, counters, nearest.x, rng);
+    const unit =
+      spawnFirst(match, player, counters, nearest.x, rng) ??
+      spawnFirst(match, player, cardsByCostDesc(player.hand, rng), nearest.x, rng);
+    if (unit && bot.bonus) {
+      player.spawnCooldownTicks = Math.max(1, Math.round(player.spawnCooldownTicks * bot.bonus.cooldownFactor));
+    }
+    return unit;
   }
 
   // 2. Attack
   if (bot.followUp) {
-    const { cardId, x } = bot.followUp;
-    const unit = spawnFirst(match, player, [cardId], x, rng);
-    if (unit) bot.followUp = null;
-    return unit;
+    if (!player.hand.includes(bot.followUp.cardId)) {
+      bot.followUp = null;
+    } else {
+      const { cardId, x } = bot.followUp;
+      const unit = spawnFirst(match, player, [cardId], x, rng);
+      if (unit) {
+        bot.followUp = null;
+        if (bot.bonus) {
+          player.spawnCooldownTicks = Math.max(1, Math.round(player.spawnCooldownTicks * bot.bonus.cooldownFactor));
+        }
+      }
+      return unit;
+    }
   }
+  const pickLane = (): number => {
+    if (bot.bonus && enemies.length > 0 && rng() < bot.bonus.predictionChance) {
+      return enemies[Math.floor(rng() * enemies.length)].x;
+    }
+    return LANES[Math.floor(rng() * LANES.length)];
+  };
+  const lane = pickLane();
   if (player.mana >= ATTACK_MANA) {
-    const lane = LANES[Math.floor(rng() * LANES.length)];
     const tank = spawnFirst(match, player, ["card_shield_bearer"], lane, rng);
     if (tank) {
-      bot.followUp = { cardId: "card_archer", x: lane };
+      if (player.hand.includes("card_archer")) {
+        bot.followUp = { cardId: "card_archer", x: lane };
+      }
+      if (bot.bonus) {
+        player.spawnCooldownTicks = Math.max(1, Math.round(player.spawnCooldownTicks * bot.bonus.cooldownFactor));
+      }
       return tank;
     }
   }
-  // Now and then, poke with something cheap instead of saving
-  if (rng() < 0.2) {
+  // Maximize Sticky Liquid usage: spend on the highest-cost affordable card in hand
+  // instead of letting liquid sit idle (only pause briefly below 7 if saving for Shield Bearer).
+  const savingForCombo = player.hand.includes("card_shield_bearer") && player.mana >= 5.5 && player.mana < ATTACK_MANA;
+  if (!savingForCombo && player.mana >= 3) {
+    const unit = spawnFirst(match, player, cardsByCostDesc(player.hand, rng), lane, rng);
+    if (unit) {
+      if (bot.bonus) {
+        player.spawnCooldownTicks = Math.max(1, Math.round(player.spawnCooldownTicks * bot.bonus.cooldownFactor));
+      }
+      return unit;
+    }
+  }
+  // Poke with cheap cards when below 3 liquid
+  if (rng() < 0.4) {
     const cheap = player.hand.filter((id) => (getUnitStats(id)?.cost ?? Infinity) <= 2);
-    const lane = LANES[Math.floor(rng() * LANES.length)];
-    return spawnFirst(match, player, shuffle(cheap, rng), lane, rng);
+    const unit = spawnFirst(match, player, cardsByCostDesc(cheap, rng), lane, rng);
+    if (unit && bot.bonus) {
+      player.spawnCooldownTicks = Math.max(1, Math.round(player.spawnCooldownTicks * bot.bonus.cooldownFactor));
+    }
+    return unit;
   }
   return null;
 }
@@ -89,6 +140,10 @@ function spawnFirst(match: Match, player: PlayerState, cardIds: string[], x: num
     if (result.ok) return result.entity;
   }
   return null;
+}
+
+function cardsByCostDesc(items: string[], rng: Rng): string[] {
+  return shuffle(items, rng).sort((a, b) => (getUnitStats(b)?.cost ?? 0) - (getUnitStats(a)?.cost ?? 0));
 }
 
 function shuffle<T>(items: T[], rng: Rng): T[] {

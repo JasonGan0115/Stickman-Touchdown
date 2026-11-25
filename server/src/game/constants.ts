@@ -21,17 +21,23 @@ export const FIELD_WIDTH = 360;
 export const FIELD_HEIGHT = 640;
 export const ENDZONE_DEPTH = FIELD_HEIGHT * 0.15; // 96: each endzone is 15% of the field
 
-// --- Mana ---
+// --- Mana / Sticky Liquid ---
 export const MAX_MANA = 10;
-export const STARTING_MANA = 0;
+export const STARTING_MANA = 3; // Starts with 3 sticky liquid
+export const RESET_MANA_ON_SCORE = 5; // Reset to 5 sticky liquid after touchdown
 export const MANA_PER_SECOND = 1;
 export const MANA_PER_TICK = MANA_PER_SECOND / TICK_RATE;
+
+// --- Cooldowns ---
+export const SPAWN_COOLDOWN_SECONDS = 2; // 2s delay between dropping troops
+export const SPAWN_COOLDOWN_TICKS = Math.round(SPAWN_COOLDOWN_SECONDS * TICK_RATE);
 
 // --- Units ---
 // Each card's cost, health, damage, range and speed live in ./units.ts
 
 // --- Loadouts ---
-export const LOADOUT_UNIT_SLOTS = 4;
+export const LOADOUT_UNIT_SLOTS = 8; // 8 sticky troops in deck
+export const ACTIVE_HAND_SIZE = 4; // 4 active sticky troops in hand
 export const LOADOUT_AUGMENT_SLOTS = 8;
 
 // --- Rewards ("Robin Hood": the loser gets the better augment) ---

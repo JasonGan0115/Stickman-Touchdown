@@ -8,6 +8,7 @@ import {
   type GameOverInfo,
   type GameStore,
   type AiMatchInfo,
+  type AugmentDraftOption,
   type HandCard,
   type Loadout,
   type MatchMode,
@@ -39,7 +40,9 @@ function makeGuestName(label: string): string {
 function spawnRejectionText(reason: string, cost?: number): string {
   switch (reason) {
     case 'not_enough_mana':
-      return cost ? `Not enough mana (need ${cost})` : 'Not enough mana';
+      return cost ? `Need ${cost} Sticky Liquid` : 'Not enough Sticky Liquid';
+    case 'cooldown_active':
+      return 'Placement cooldown active (2s)';
     case 'outside_home_endzone':
       return 'Server: outside your endzone';
     case 'invalid_coordinates':
@@ -60,6 +63,9 @@ interface MatchFoundPayload {
   players: RoomPlayer[];
   loadout: Loadout;
   hand: HandCard[];
+  nextCard?: HandCard | null;
+  opponentPreview?: HandCard[];
+  silverDraftOptions?: AugmentDraftOption[];
   boosts: string[];
   ai?: AiMatchInfo | null;
   durationMs: number;
@@ -73,6 +79,8 @@ interface StateUpdatePayload {
   score: Score;
   entities: Entity[];
   killed?: string[];
+  spawnCooldownRemainingMs?: number;
+  roundReset?: boolean;
 }
 
 /** One Socket.io connection that writes into one game store. Create several to simulate several players. */
@@ -142,18 +150,41 @@ export class SocketService {
         roomPlayers: d.players,
         loadout: d.loadout,
         hand: d.hand ?? [],
+        nextCard: d.nextCard ?? null,
+        opponentPreview: d.opponentPreview ?? [],
+        silverDraftOptions: d.silverDraftOptions ?? [],
         boosts: d.boosts ?? [],
         ai: d.ai ?? null,
         durationMs: d.durationMs,
       }),
     );
+    socket.on('draft_confirmed', ({ boosts }: { augmentId: string; boosts: string[] }) => {
+      state().setBoosts(boosts ?? []);
+      state().setDraftModal(null);
+    });
+    socket.on('comeback_draft', ({ options }: { options: AugmentDraftOption[] }) => {
+      state().setDraftModal({ active: true, type: 'comeback', options: options ?? [] });
+    });
+    socket.on('hand_update', ({ hand, nextCard }: { hand: HandCard[]; nextCard: HandCard | null }) => {
+      state().setHandUpdate(hand ?? [], nextCard ?? null);
+    });
     socket.on('tournament_match_start', ({ matchId, tournament }: { matchId: string; tournament: TournamentInfo }) => {
       if (matchId === state().roomID) state().setTournament(tournament);
     });
 
-    socket.on('state_update', ({ matchId, timeRemainingMs, mana, score, entities, killed }: StateUpdatePayload) => {
+    socket.on('state_update', (d: StateUpdatePayload) => {
       // Ignore stray ticks from a match we're no longer in
-      if (matchId === state().roomID) state().applyStateUpdate({ timeRemainingMs, mana, score, entities, killed: killed ?? [] });
+      if (d.matchId === state().roomID) {
+        state().applyStateUpdate({
+          timeRemainingMs: d.timeRemainingMs,
+          mana: d.mana,
+          score: d.score,
+          entities: d.entities,
+          killed: d.killed ?? [],
+          spawnCooldownRemainingMs: d.spawnCooldownRemainingMs,
+          roundReset: d.roundReset,
+        });
+      }
     });
 
     socket.on('spawn_rejected', ({ reason, cost }: { reason: string; cost?: number }) =>
@@ -175,8 +206,8 @@ export class SocketService {
   }
 
   /** Starts a practice match against the computer. With autoplay, the AI plays your side too. */
-  playVsAi(autoplay = false): void {
-    this.socket?.emit('join_bot_match', { autoplay });
+  playVsAi(autoplay = false, difficulty?: number): void {
+    this.socket?.emit('join_bot_match', { autoplay, difficulty });
   }
 
   leaveQueue(): void {
@@ -187,6 +218,12 @@ export class SocketService {
   /** Asks the server to spawn the given card at (x, y) in world units. The server validates the card, mana and position. */
   spawn(cardId: string, x: number, y: number): void {
     this.socket?.emit('spawn_request', { cardId, x, y });
+  }
+
+  /** Picks an in-match augment (Silver kickoff draft or Comeback draft). */
+  pickDraft(augmentId: string, isComeback = false): void {
+    this.socket?.emit(isComeback ? 'comeback_pick' : 'draft_pick', { augmentId });
+    this.store.getState().setDraftModal(null);
   }
 
   /** DEBUG: ends the current match as a Player 1 win (server ignores this in production). */

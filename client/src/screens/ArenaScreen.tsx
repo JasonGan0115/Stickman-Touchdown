@@ -3,22 +3,24 @@ import { Pressable, StyleSheet, Text, View, type GestureResponderEvent, type Lay
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
+import { DraftModal } from '../components/DraftModal';
 import { EffectsLayer } from '../components/EffectsLayer';
 import { Stickman } from '../components/Stickman';
 import { LiveUnit } from '../components/UnitSprite';
 import { ENDZONE_DEPTH, FIELD_HEIGHT, FIELD_WIDTH, MAX_MANA } from '../game/constants';
+import { soundService } from '../services/SoundService';
 import type { SocketService } from '../services/SocketService';
 import { selectMe, selectOpponent, selectSelectedCard, type GameStore } from '../store/useGameStore';
 
 const COLORS = {
-  field: '#2f8f3a',
-  fieldStripe: '#2a8133', // every other band between the endzones, like mowed grass
+  field: '#227230',
+  fieldStripe: '#1e662b', // every other band between the endzones, like mowed grass
   fieldLine: 'rgba(255,255,255,0.25)',
-  homeEndzone: '#8fd3ff', // light blue
+  homeEndzone: '#38bdf8', // light blue
   enemyEndzone: '#ff9a9a', // light red
   myUnit: '#1f5fff', // blue
   enemyUnit: '#e0262b', // red
-  mana: '#b14cff',
+  mana: '#06d6a0', // vibrant slime / sticky liquid green
 };
 
 // Logs every tap's screen/world coordinates to Metro. Handy for debugging the
@@ -105,28 +107,38 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
     const card = selectSelectedCard(state);
     if (!card) {
       state.setSpawnError('Pick a card first');
+      soundService.playWarning();
+      return;
+    }
+    if (state.spawnCooldownRemainingMs > 0) {
+      state.setSpawnError('Troop on cooldown! (2s)');
+      soundService.playWarning();
       return;
     }
     if (screenY < FIELD_HEIGHT - ENDZONE_DEPTH) {
       if (LOG_TAPS) console.log(`${tag} not sent: tap was outside the bottom endzone on screen`);
       state.setSpawnError('Tap inside your endzone to spawn');
+      soundService.playWarning();
       return;
     }
     if (state.mana < card.cost) {
-      state.setSpawnError(`Not enough mana for ${card.name} (need ${card.cost})`);
+      state.setSpawnError(`Need ${card.cost} Sticky Liquid for ${card.name}`);
+      soundService.playWarning();
       return;
     }
     service.spawn(card.cardId, worldX, worldY);
+    soundService.playSpawn();
   };
 
   return (
     <View style={styles.root}>
+      <DraftModal store={store} service={service} />
       <View style={styles.area} onLayout={onLayout}>
         {scale > 0 && (
           <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn}>
             {/* The game board, in world coordinates, rotated for Player 2 */}
             <View style={[styles.board, flipped && styles.rotated]}>
-<FieldStripes />
+              <FieldStripes flipped={flipped} />
               <View style={[styles.line, { top: '50%' }]} />
               {/* World top = Player 2's endzone, world bottom = Player 1's */}
               <View
@@ -153,6 +165,7 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
               <Text style={styles.endzoneLabel}>HOME ENDZONE · TAP TO SPAWN</Text>
             </View>
             <Hud store={store} compact={compact} />
+            <TouchdownBannerOverlay store={store} />
             <ManaBar store={store} />
             <SpawnToast store={store} />
             {debugFlipView && (
@@ -169,8 +182,12 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
   );
 }
 
+const YARD_LABELS = ['10', '20', '30', '40', '50', '40', '30', '20', '10'];
+
 /** Grass bands and yard lines between the two endzones. Static, drawn under everything else. */
-const FieldStripes = memo(function FieldStripes() {
+const FieldStripes = memo(function FieldStripes({ flipped }: { flipped: boolean }) {
+  const rotateStyle = { transform: [{ rotate: flipped ? '180deg' : '0deg' }] };
+
   return (
     <>
       {Array.from({ length: FIELD_BANDS }, (_, i) => (
@@ -183,9 +200,35 @@ const FieldStripes = memo(function FieldStripes() {
           ]}
         />
       ))}
-      {Array.from({ length: FIELD_BANDS + 1 }, (_, i) => (
-        <View key={`l${i}`} style={[styles.yardLine, { top: `${ENDZONE_PCT_NUM + i * BAND_PCT}%` }]} />
-      ))}
+      {Array.from({ length: FIELD_BANDS + 1 }, (_, i) => {
+        const topPct = ENDZONE_PCT_NUM + i * BAND_PCT;
+        const isIntermediate = i > 0 && i < FIELD_BANDS;
+        const yardLabel = isIntermediate ? YARD_LABELS[i - 1] : null;
+
+        return (
+          <View key={`line-group-${i}`} pointerEvents="none">
+            <View style={[styles.yardLine, { top: `${topPct}%` }]} />
+            {isIntermediate && (
+              <>
+                {/* Sideline yard numbers */}
+                <Text style={[styles.yardNumber, styles.yardNumberLeft, { top: `${topPct}%` }, rotateStyle]}>
+                  {yardLabel}
+                </Text>
+                <Text style={[styles.yardNumber, styles.yardNumberRight, { top: `${topPct}%` }, rotateStyle]}>
+                  {yardLabel}
+                </Text>
+                {/* Hash marks across the field */}
+                <View style={[styles.hashMark, { top: `${topPct}%`, left: '33%' }]} />
+                <View style={[styles.hashMark, { top: `${topPct}%`, left: '67%' }]} />
+              </>
+            )}
+          </View>
+        );
+      })}
+      {/* Midfield emblem */}
+      <View style={[styles.midfieldEmblem, rotateStyle]} pointerEvents="none">
+        <Text style={styles.midfieldEmblemText}>🏈</Text>
+      </View>
     </>
   );
 });
@@ -234,7 +277,11 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
   const enemyScore = useStore(store, (s) => s.score.opponent);
   const opponentName = useStore(store, (s) => selectOpponent(s)?.username ?? 'ENEMY');
   const tournamentName = useStore(store, (s) => (s.mode === 'tournament' ? (s.tournament?.name ?? 'Weekly Tournament') : null));
-  const aiLabel = useStore(store, (s) => (!s.ai ? null : s.ai.autoplay ? 'AI VS AI · WATCHING' : 'PRACTICE VS AI'));
+  const aiLabel = useStore(store, (s) => {
+    if (!s.ai) return null;
+    if (s.ai.autoplay) return 'AI VS AI · WATCHING';
+    return s.ai.difficulty ? `PRACTICE VS AI · LVL ${s.ai.difficulty}` : 'PRACTICE VS AI';
+  });
 
   return (
     <View style={styles.hud}>
@@ -263,6 +310,29 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
   );
 }
 
+function TouchdownBannerOverlay({ store }: { store: GameStore }) {
+  const visible = useStore(store, (s) => s.touchdownBanner);
+
+  useEffect(() => {
+    if (!visible) return;
+    soundService.playTouchdown();
+    const t = setTimeout(() => {
+      store.setState({ touchdownBanner: false });
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [visible, store]);
+
+  if (!visible) return null;
+  return (
+    <View style={styles.touchdownOverlay}>
+      <View style={styles.touchdownBanner}>
+        <Text style={styles.touchdownTitle}>🏈 TOUCHDOWN! 🏈</Text>
+        <Text style={styles.touchdownSubtitle}>POINT SCORED · ROUND RESET WITH 5 LIQUID</Text>
+      </View>
+    </View>
+  );
+}
+
 function ManaBar({ store }: { store: GameStore }) {
   const mana = useStore(store, (s) => s.mana);
   const cost = useStore(store, (s) => selectSelectedCard(s)?.cost ?? Infinity);
@@ -270,8 +340,9 @@ function ManaBar({ store }: { store: GameStore }) {
 
   return (
     <View style={styles.manaWrap}>
+      <Text style={styles.liquidLabel}>💧 LIQUID</Text>
       <View style={styles.manaTrack}>
-        <View style={[styles.manaFill, { width: `${(mana / MAX_MANA) * 100}%`, opacity: canSpawn ? 1 : 0.55 }]} />
+        <View style={[styles.manaFill, { width: `${(mana / MAX_MANA) * 100}%`, opacity: canSpawn ? 1 : 0.6 }]} />
         {/* One divider per mana point */}
         {Array.from({ length: MAX_MANA - 1 }, (_, i) => (
           <View key={i} style={[styles.manaDivider, { left: `${((i + 1) / MAX_MANA) * 100}%` }]} />
@@ -286,46 +357,87 @@ function ManaBar({ store }: { store: GameStore }) {
 
 /**
  * The player's cards for this match. Tap one to select it, then tap the
- * endzone to spawn it. Cards you can't afford yet are dimmed. Mana is only
- * read here as whole points, so this re-renders once per mana point, not every tick.
+ * endzone to spawn it. Cards you can't afford yet or on cooldown are dimmed.
  */
 function CardHand({ store, compact }: { store: GameStore; compact: boolean }) {
   const hand = useStore(store, (s) => s.hand);
+  const nextCard = useStore(store, (s) => s.nextCard);
   const selectedCardId = useStore(store, (s) => s.selectedCardId);
   const wholeMana = useStore(store, (s) => Math.floor(s.mana));
+  const cooldownRemaining = useStore(store, (s) => s.spawnCooldownRemainingMs);
 
   if (!hand.length) return null;
   return (
-    <View style={styles.hand}>
-      {hand.map((card) => {
-        const selected = card.cardId === selectedCardId;
-        const affordable = wholeMana >= card.cost;
-        return (
-          <Pressable
-            key={card.cardId}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={`${card.name}, ${card.cost} mana`}
-            onPress={() => store.getState().selectCard(card.cardId)}
-            style={({ pressed }) => [
-              styles.card,
-              compact && styles.cardCompact,
-              selected && styles.cardSelected,
-              !affordable && styles.cardUnaffordable,
-              pressed && styles.cardPressed,
-            ]}
-          >
-            <View style={styles.cardCost}>
-              <Text style={styles.cardCostText}>{card.cost}</Text>
-            </View>
-            <Stickman type={card.type} teamColor={COLORS.myUnit} size={compact ? 28 : 40} animated={false} />
-            <Text style={styles.cardName} numberOfLines={1}>
-              {card.name}
-            </Text>
-            {!compact && <Text style={styles.cardType}>{card.type}</Text>}
-          </Pressable>
-        );
-      })}
+    <View style={styles.handRow}>
+      {!compact && nextCard && (
+        <View style={styles.nextCardBox}>
+          <Text style={styles.nextCardLabel}>NEXT</Text>
+          <View style={styles.nextCardInner}>
+            <Text style={styles.nextCostText}>{nextCard.cost}</Text>
+            <Stickman type={nextCard.type} movement={nextCard.movement} teamColor={COLORS.myUnit} size={22} animated={false} />
+          </View>
+        </View>
+      )}
+
+      <View style={styles.hand}>
+        {hand.map((card) => {
+          const selected = card.cardId === selectedCardId;
+          const affordable = wholeMana >= card.cost;
+          const onCooldown = cooldownRemaining > 0;
+          return (
+            <Pressable
+              key={card.cardId}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`${card.name}, ${card.cost} liquid`}
+              onPress={() => {
+                store.getState().selectCard(card.cardId);
+                soundService.playSpawn();
+              }}
+              style={({ pressed }) => [
+                styles.card,
+                compact && styles.cardCompact,
+                selected && styles.cardSelected,
+                (!affordable || onCooldown) && styles.cardUnaffordable,
+                pressed && styles.cardPressed,
+              ]}
+            >
+              <View style={styles.cardCost}>
+                <Text style={styles.cardCostText}>{card.cost}</Text>
+              </View>
+              {card.movement && card.movement !== 'walking' && (
+                <View style={styles.movementBadge}>
+                  <Text style={styles.movementBadgeText}>
+                    {card.movement === 'flying' ? '🪽' : card.movement === 'running' ? '⚡' : '⛸️'}
+                  </Text>
+                </View>
+              )}
+              <Stickman type={card.type} movement={card.movement} teamColor={COLORS.myUnit} size={compact ? 28 : 36} animated={false} />
+              <Text style={styles.cardName} numberOfLines={1}>
+                {card.name}
+              </Text>
+              {!compact && (
+                <Text
+                  style={[
+                    styles.cardType,
+                    (card.type === 'Ranged' || card.type === 'Caster' || card.movement === 'flying') &&
+                      styles.cardTypeAir,
+                  ]}
+                >
+                  {card.type === 'Ranged' || card.type === 'Caster' || card.movement === 'flying'
+                    ? 'AIR+GND'
+                    : 'GROUND'}
+                </Text>
+              )}
+              {onCooldown && (
+                <View style={styles.cooldownOverlay}>
+                  <Text style={styles.cooldownText}>{(cooldownRemaining / 1000).toFixed(1)}s</Text>
+                </View>
+              )}
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -377,6 +489,38 @@ const styles = StyleSheet.create({
   line: { position: 'absolute', left: 0, right: 0, height: 3, backgroundColor: COLORS.fieldLine },
   band: { position: 'absolute', left: 0, right: 0 },
   yardLine: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: 'rgba(255,255,255,0.18)' },
+  yardNumber: {
+    position: 'absolute',
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 10,
+    fontWeight: '900',
+    marginTop: -7,
+  },
+  yardNumberLeft: { left: 8 },
+  yardNumberRight: { right: 8 },
+  hashMark: {
+    position: 'absolute',
+    width: 6,
+    height: 2,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    marginTop: -1,
+  },
+  midfieldEmblem: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    width: 44,
+    height: 44,
+    marginLeft: -22,
+    marginTop: -22,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.25)',
+    backgroundColor: 'rgba(0,0,0,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  midfieldEmblemText: { fontSize: 20 },
   endzone: { position: 'absolute', left: 0, right: 0, height: ENDZONE_PCT },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
 
@@ -404,6 +548,7 @@ const styles = StyleSheet.create({
   aiBanner: { backgroundColor: '#534ab7', borderRadius: 10, paddingVertical: 3, paddingHorizontal: 12 },
   aiBannerText: { color: '#eeedfe', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
 
+  liquidLabel: { color: COLORS.mana, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
   manaWrap: {
     position: 'absolute',
     bottom: 8,
@@ -419,6 +564,33 @@ const styles = StyleSheet.create({
   manaDivider: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: 'rgba(255,255,255,0.35)' },
   manaText: { color: '#fff', fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'], minWidth: 44, textAlign: 'right' },
 
+  touchdownOverlay: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    pointerEvents: 'none',
+  },
+  touchdownBanner: {
+    backgroundColor: '#ffb020',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  touchdownTitle: { color: '#1a1200', fontSize: 24, fontWeight: '900', letterSpacing: 2 },
+  touchdownSubtitle: { color: '#2d2004', fontSize: 11, fontWeight: '800', marginTop: 4, letterSpacing: 1 },
+
   toastWrap: { position: 'absolute', top: '55%', left: 0, right: 0, alignItems: 'center', pointerEvents: 'none' },
   toast: {
     color: '#fff',
@@ -429,7 +601,22 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     fontWeight: '700',
   },
-  hand: { flexDirection: 'row', gap: 8, paddingHorizontal: 4 },
+  handRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 },
+  nextCardBox: {
+    width: 48,
+    minHeight: 76,
+    backgroundColor: '#1c1f28',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+  },
+  nextCardLabel: { color: '#8a8f9c', fontSize: 9, fontWeight: '800', letterSpacing: 1, marginBottom: 2 },
+  nextCardInner: { alignItems: 'center' },
+  nextCostText: { color: COLORS.mana, fontSize: 10, fontWeight: '900' },
+  hand: { flex: 1, flexDirection: 'row', gap: 6 },
   card: {
     flex: 1,
     minHeight: 76,
@@ -441,6 +628,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 6,
     paddingHorizontal: 4,
+    overflow: 'hidden',
   },
   cardCompact: { minHeight: 48, paddingVertical: 3 },
   cardSelected: { borderColor: COLORS.homeEndzone, backgroundColor: '#2f3a52' },
@@ -457,9 +645,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardCostText: { color: '#fff', fontSize: 11, fontWeight: '900' },
-  cardName: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  cardType: { color: '#8a8f9c', fontSize: 10 },
+  cardCostText: { color: '#10141c', fontSize: 11, fontWeight: '900' },
+  movementBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+  },
+  movementBadgeText: { fontSize: 11 },
+  cooldownOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(15,18,24,0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cooldownText: { color: '#ffb020', fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  cardName: { color: '#fff', fontSize: 10, fontWeight: '700', textAlign: 'center', marginTop: 2 },
+  cardType: { color: '#8a8f9c', fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
+  cardTypeAir: { color: '#38bdf8' },
   boosts: { color: '#c9a6ff', fontSize: 11, fontWeight: '700', textAlign: 'center', paddingHorizontal: 8 },
 
   debugBadge: { position: 'absolute', top: '42%', alignSelf: 'center', backgroundColor: '#ff00aa', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, pointerEvents: 'none' },

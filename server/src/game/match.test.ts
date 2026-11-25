@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { combineAugments, describeModifiers, NO_MODIFIERS } from "./augments";
-import { FIELD_HEIGHT, MAX_MANA, TICK_RATE } from "./constants";
-import { addUnit, createMatch, stepMatch, trySpawn, type Match } from "./match";
-import { DEFAULT_HAND, UNIT_STATS } from "./units";
+import { AUGMENTS, combineAugments, describeModifiers, getDraftOptions, NO_MODIFIERS } from "./augments";
+import { AUGMENT_DURATION_MS, FIELD_HEIGHT, MAX_MANA, TICK_RATE, WINNING_SCORE } from "./constants";
+import { addUnit, applyAugment, createMatch, getScoreLimitWinner, stepMatch, trySpawn, type Match } from "./match";
+import { pruneLoadout } from "../players";
+import { DEFAULT_HAND, sampleRandomCards, UNIT_STATS } from "./units";
 
 const FOOT = UNIT_STATS.card_footsoldier;
 const ARCHER = UNIT_STATS.card_archer;
@@ -28,7 +29,8 @@ const steps = (match: Match, n: number) => {
 describe("hand", () => {
   test("a player without a saved deck gets the default hand", () => {
     const match = newMatch([]);
-    assert.deepEqual(match.players[0].hand, DEFAULT_HAND);
+    assert.deepEqual(match.players[0].hand, DEFAULT_HAND.slice(0, 4));
+    assert.deepEqual(match.players[0].drawQueue, DEFAULT_HAND.slice(4));
   });
 
   test("the hand keeps the loadout's order and drops unknown and duplicate cards", () => {
@@ -65,12 +67,36 @@ describe("trySpawn", () => {
     });
 
     p1.mana = MAX_MANA;
+    p1.spawnCooldownTicks = 0;
     const result = trySpawn(match, p1, MAGE.cardId, 100, P1_HOME_Y);
     assert.ok(result.ok);
     assert.equal(p1.mana, MAX_MANA - MAGE.cost);
     assert.equal(result.entity.type, "Caster");
     assert.equal(result.entity.health, MAGE.health);
     assert.equal(result.entity.damage, MAGE.damage);
+  });
+
+  test("enforces 2-second placement cooldown", () => {
+    const match = newMatch();
+    const p1 = match.players[0];
+    p1.mana = MAX_MANA;
+    const first = trySpawn(match, p1, p1.hand[0], 100, P1_HOME_Y);
+    assert.ok(first.ok);
+    const second = trySpawn(match, p1, p1.hand[0], 100, P1_HOME_Y);
+    assert.equal(second.ok, false);
+    if (!second.ok) assert.equal(second.reason, "cooldown_active");
+  });
+
+  test("cycles the spawned card to the draw queue and draws the next card", () => {
+    const match = newMatch();
+    const p1 = match.players[0];
+    p1.mana = MAX_MANA;
+    const playedCard = p1.hand[0];
+    const nextExpected = p1.drawQueue[0];
+    const result = trySpawn(match, p1, playedCard, 100, P1_HOME_Y);
+    assert.ok(result.ok);
+    assert.equal(p1.hand[0], nextExpected);
+    assert.equal(p1.drawQueue.at(-1), playedCard);
   });
 
   test("still requires the home endzone", () => {
@@ -144,6 +170,55 @@ describe("stepMatch", () => {
     stepMatch(match);
     assert.equal(ally.health, FOOT.health);
   });
+
+  test("ground melee and tank units cannot target flying aerial units, while ranged and caster can", () => {
+    const match = newMatch();
+    const [p1, p2] = match.players;
+    const bat = UNIT_STATS.card_bat_flyer;
+    const tank = UNIT_STATS.card_shield_bearer;
+    addUnit(match, p1, FOOT, 180, 300); // ground melee
+    addUnit(match, p1, tank, 180, 305); // ground tank
+    addUnit(match, p1, ARCHER, 180, 310); // ranged (air + ground)
+    addUnit(match, p1, MAGE, 180, 310); // caster (air + ground)
+    addUnit(match, p2, bat, 180, 320); // flying enemy right next to them
+    stepMatch(match);
+    const groundFoot = match.entities.find((e) => e.cardId === FOOT.cardId);
+    const groundTank = match.entities.find((e) => e.cardId === tank.cardId);
+    const ranged = match.entities.find((e) => e.cardId === ARCHER.cardId);
+    const caster = match.entities.find((e) => e.cardId === MAGE.cardId);
+    assert.equal(groundFoot?.state, "moving", "ground melee cannot lock onto flying");
+    assert.equal(groundTank?.state, "moving", "ground tank cannot lock onto flying");
+    assert.equal(ranged?.state, "attacking", "ranged can target flying");
+    assert.equal(caster?.state, "attacking", "caster can target flying");
+  });
+
+  test("scoring a touchdown resets the field with 5 sticky liquid", () => {
+    const match = newMatch();
+    const [p1, p2] = match.players;
+    p1.mana = 1;
+    p2.mana = 1;
+    // P1 attacks up the field (y decreases). Endzone is <= ENDZONE_DEPTH (96).
+    // Placing at 96 + FOOT.speed ensures it reaches the endzone in 1 tick.
+    addUnit(match, p1, FOOT, 180, 96 + FOOT.speed);
+    const events = stepMatch(match);
+    assert.equal(events.scored.length, 1);
+    assert.equal(events.roundReset, true);
+    assert.equal(p1.score, 1);
+    assert.equal(match.entities.length, 0, "field cleared on touchdown");
+    assert.equal(p1.mana, 5, "scorer liquid set to 5");
+    assert.equal(p2.mana, 5, "defender liquid set to 5");
+  });
+
+  test("first player to 3 touchdowns wins the match immediately", () => {
+    const match = newMatch();
+    const [p1] = match.players;
+    p1.score = WINNING_SCORE - 1;
+    assert.equal(getScoreLimitWinner(match), undefined);
+    addUnit(match, p1, FOOT, 180, 96 + FOOT.speed);
+    stepMatch(match);
+    assert.equal(p1.score, WINNING_SCORE);
+    assert.equal(getScoreLimitWinner(match)?.id, p1.id);
+  });
 });
 
 describe("augments", () => {
@@ -199,7 +274,71 @@ describe("augments", () => {
     const match = withAugments("aug_mana_surge");
     steps(match, TICK_RATE); // one second
     const [boosted, normal] = match.players;
-    assert.ok(Math.abs(boosted.mana - 1.2) < 1e-9);
-    assert.ok(Math.abs(normal.mana - 1) < 1e-9);
+    assert.ok(Math.abs(boosted.mana - (3 + 1.2)) < 1e-9);
+    assert.ok(Math.abs(normal.mana - (3 + 1)) < 1e-9);
+  });
+});
+
+describe("draft and scouting", () => {
+  test("sampleRandomCards returns unique random cards from deck", () => {
+    const deck = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
+    const sampled = sampleRandomCards(deck, 4);
+    assert.equal(sampled.length, 4);
+    assert.equal(new Set(sampled).size, 4);
+    for (const c of sampled) assert.ok(deck.includes(c));
+  });
+
+  test("getDraftOptions silver returns 3 Common augments", () => {
+    const options = getDraftOptions("silver", 3);
+    assert.equal(options.length, 3);
+    assert.equal(new Set(options.map((o) => o.id)).size, 3);
+    for (const o of options) {
+      assert.equal(o.rarity, "Common");
+      assert.ok(o.effect.length > 0);
+    }
+  });
+
+  test("getDraftOptions gold_or_legendary returns Rare or Legendary augments", () => {
+    const options = getDraftOptions("gold_or_legendary", 3);
+    assert.equal(options.length, 3);
+    assert.equal(new Set(options.map((o) => o.id)).size, 3);
+    for (const o of options) {
+      assert.ok(o.rarity === "Rare" || o.rarity === "Legendary");
+      assert.ok(o.effect.length > 0);
+    }
+  });
+
+  test("applyAugment mid-match updates loadout and modifiers immediately", () => {
+    const match = newMatch();
+    const p1 = match.players[0];
+    assert.equal(p1.modifiers.health, 1);
+    applyAugment(p1, "aug_iron_skin"); // +10% health
+    assert.ok(p1.loadout.augmentIds.includes("aug_iron_skin"));
+    assert.ok(Math.abs(p1.modifiers.health - 1.1) < 1e-9);
+  });
+
+  test("100-augment catalog has 100 unique augments across Common, Rare, and Legendary", () => {
+    const all = Object.values(AUGMENTS);
+    assert.equal(all.length, 100);
+    assert.equal(new Set(all.map((a) => a.id)).size, 100);
+    assert.equal(new Set(all.map((a) => a.name)).size, 100);
+    assert.ok(all.some((a) => a.rarity === "Common"));
+    assert.ok(all.some((a) => a.rarity === "Rare"));
+    assert.ok(all.some((a) => a.rarity === "Legendary"));
+    for (const a of all) assert.ok(a.modifier > 1);
+  });
+
+  test("augments expire after 24 hours and pruneLoadout drops expired or excess grants", () => {
+    assert.equal(AUGMENT_DURATION_MS, 24 * 60 * 60 * 1000);
+    const pruned = pruneLoadout(
+      {
+        unitIds: ["card_footsoldier", "card_unowned"],
+        augmentIds: ["aug_iron_skin", "aug_iron_skin", "aug_expired"],
+      },
+      new Set(["card_footsoldier"]),
+      new Map([["aug_iron_skin", 1]]),
+    );
+    assert.deepEqual(pruned.unitIds, ["card_footsoldier"]);
+    assert.deepEqual(pruned.augmentIds, ["aug_iron_skin"]);
   });
 });

@@ -25,6 +25,11 @@ interface CardData {
   name: string;
   type: string;
   manaCost: number;
+  movement?: string;
+}
+
+function targetLabel(c: Pick<CardData, 'type' | 'movement'>): string {
+  return c.type === 'Ranged' || c.type === 'Caster' || c.movement === 'flying' ? 'Air+Gnd' : 'Ground';
 }
 
 interface AugmentGrant {
@@ -74,12 +79,112 @@ const inside = (r: Rect | null | undefined, x: number, y: number) =>
 
 const hoursUntil = (iso: string) => Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 3_600_000));
 
+function pickRandomSlots(ids: string[], slotCount: number): (string | null)[] {
+  const pool = [...ids];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const slots = Array<string | null>(slotCount).fill(null);
+  pool.slice(0, slotCount).forEach((id, i) => {
+    slots[i] = id;
+  });
+  return slots;
+}
+
 async function fetchCollection(): Promise<Collection> {
   const username = await socketService.getUsername();
-  const res = await fetch(`${getServerUrl()}/player/${encodeURIComponent(username)}/collection`);
-  const body = await res.json();
-  if (!res.ok || !body.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
-  return body as Collection;
+  try {
+    const res = await fetch(`${getServerUrl()}/player/${encodeURIComponent(username)}/collection`);
+    const body = await res.json();
+    if (res.ok && body.ok) return body as Collection;
+  } catch {
+    // Database or server unavailable: provide full offline roster for deck building
+  }
+
+  return {
+    username,
+    cards: [
+      { id: 'card_footsoldier', name: 'Footsoldier', type: 'Melee', manaCost: 1 },
+      { id: 'card_archer', name: 'Archer', type: 'Ranged', manaCost: 2 },
+      { id: 'card_shield_bearer', name: 'Shield Bearer', type: 'Tank', manaCost: 3 },
+      { id: 'card_battle_mage', name: 'Battle Mage', type: 'Caster', manaCost: 4 },
+      { id: 'card_speed_skater', name: 'Slime Skater', type: 'Melee', manaCost: 2 },
+      { id: 'card_sticky_runner', name: 'Touchdown Sprinter', type: 'Melee', manaCost: 3 },
+      { id: 'card_bat_flyer', name: 'Sticky Bat', type: 'Ranged', manaCost: 3 },
+      { id: 'card_glue_bomber', name: 'Glue Bomber', type: 'Caster', manaCost: 4 },
+      { id: 'card_slime_ninja', name: 'Slime Ninja', type: 'Melee', manaCost: 3 },
+      { id: 'card_sky_valkyrie', name: 'Sky Valkyrie', type: 'Melee', manaCost: 4 },
+      { id: 'card_tar_golem', name: 'Tar Golem', type: 'Tank', manaCost: 5 },
+      { id: 'card_blitz_rusher', name: 'Blitz Rusher', type: 'Tank', manaCost: 4 },
+      { id: 'card_spitfire_wasp', name: 'Spitfire Wasp', type: 'Ranged', manaCost: 2 },
+      { id: 'card_frost_slider', name: 'Frost Slider', type: 'Caster', manaCost: 4 },
+      { id: 'card_linebacker', name: 'Sticky Linebacker', type: 'Melee', manaCost: 3 },
+      { id: 'card_acid_spitter', name: 'Acid Spitter', type: 'Ranged', manaCost: 3 },
+      { id: 'card_quarterback', name: 'Quarterback', type: 'Ranged', manaCost: 4 },
+      { id: 'card_wide_receiver', name: 'Wide Receiver', type: 'Melee', manaCost: 2 },
+      { id: 'card_center_guard', name: 'Center Guard', type: 'Tank', manaCost: 4 },
+      { id: 'card_referee', name: 'Referee', type: 'Caster', manaCost: 3 },
+      { id: 'card_cheerleader', name: 'Cheerleader', type: 'Caster', manaCost: 2 },
+      { id: 'card_cornerback', name: 'Cornerback', type: 'Melee', manaCost: 3 },
+      { id: 'card_halfback', name: 'Halfback', type: 'Melee', manaCost: 3 },
+      { id: 'card_safety', name: 'Safety', type: 'Ranged', manaCost: 3 },
+      { id: 'card_tight_end', name: 'Tight End', type: 'Tank', manaCost: 5 },
+      { id: 'card_kicker', name: 'Kicker', type: 'Ranged', manaCost: 2 },
+      { id: 'card_punter', name: 'Punter', type: 'Caster', manaCost: 3 },
+      { id: 'card_sky_falcon', name: 'Sky Falcon', type: 'Melee', manaCost: 3 },
+      { id: 'card_aerial_drone', name: 'Aerial Drone', type: 'Ranged', manaCost: 4 },
+      { id: 'card_storm_cloud', name: 'Storm Cloud', type: 'Caster', manaCost: 5 },
+      { id: 'card_ice_striker', name: 'Ice Striker', type: 'Melee', manaCost: 4 },
+      { id: 'card_glacier_turtle', name: 'Glacier Turtle', type: 'Tank', manaCost: 4 },
+      { id: 'card_slime_puppy', name: 'Slime Puppy', type: 'Melee', manaCost: 1 },
+      { id: 'card_toxic_crawler', name: 'Toxic Crawler', type: 'Melee', manaCost: 2 },
+      { id: 'card_ooze_lobber', name: 'Ooze Lobber', type: 'Caster', manaCost: 3 },
+      { id: 'card_sludge_bruiser', name: 'Sludge Bruiser', type: 'Melee', manaCost: 4 },
+      { id: 'card_sticky_spider', name: 'Sticky Spider', type: 'Melee', manaCost: 3 },
+      { id: 'card_plasma_wisp', name: 'Plasma Wisp', type: 'Ranged', manaCost: 1 },
+      { id: 'card_bog_behemoth', name: 'Bog Behemoth', type: 'Tank', manaCost: 6 },
+      { id: 'card_glue_mortar', name: 'Glue Mortar', type: 'Caster', manaCost: 5 },
+      { id: 'card_mud_slider', name: 'Mud Slider', type: 'Melee', manaCost: 2 },
+      { id: 'card_tar_dragon', name: 'Tar Dragon', type: 'Caster', manaCost: 6 },
+      { id: 'card_gargoyle', name: 'Gargoyle', type: 'Tank', manaCost: 5 },
+      { id: 'card_harpy', name: 'Harpy', type: 'Melee', manaCost: 2 },
+      { id: 'card_frost_weaver', name: 'Frost Weaver', type: 'Caster', manaCost: 3 },
+      { id: 'card_dart_goblin', name: 'Dart Goblin', type: 'Ranged', manaCost: 2 },
+      { id: 'card_iron_slug', name: 'Iron Slug', type: 'Tank', manaCost: 3 },
+      { id: 'card_lightning_rod', name: 'Lightning Rod', type: 'Caster', manaCost: 4 },
+      { id: 'card_titan_linebacker', name: 'Titan Linebacker', type: 'Tank', manaCost: 5 },
+      { id: 'card_stealth_skater', name: 'Stealth Skater', type: 'Melee', manaCost: 3 },
+      { id: 'card_sky_phoenix', name: 'Sky Phoenix', type: 'Caster', manaCost: 5 },
+      { id: 'card_voodoo_witch', name: 'Voodoo Witch', type: 'Caster', manaCost: 4 },
+      { id: 'card_shadow_assassin', name: 'Shadow Assassin', type: 'Melee', manaCost: 4 },
+      { id: 'card_crystal_archer', name: 'Crystal Archer', type: 'Ranged', manaCost: 4 },
+      { id: 'card_magma_golem', name: 'Magma Golem', type: 'Tank', manaCost: 5 },
+      { id: 'card_zephyr_scout', name: 'Zephyr Scout', type: 'Ranged', manaCost: 3 },
+      { id: 'card_ice_breaker', name: 'Ice Breaker', type: 'Melee', manaCost: 4 },
+      { id: 'card_slime_cannon', name: 'Slime Cannon', type: 'Ranged', manaCost: 5 },
+      { id: 'card_sonic_bat', name: 'Sonic Bat', type: 'Ranged', manaCost: 4 },
+      { id: 'card_whirlwind_dervish', name: 'Whirlwind Dervish', type: 'Melee', manaCost: 3 },
+      { id: 'card_abyssal_warden', name: 'Abyssal Warden', type: 'Tank', manaCost: 4 },
+      { id: 'card_inferno_imp', name: 'Inferno Imp', type: 'Ranged', manaCost: 1 },
+      { id: 'card_sky_dreadnought', name: 'Sky Dreadnought', type: 'Tank', manaCost: 6 },
+      { id: 'card_touchdown_god', name: 'Touchdown God', type: 'Melee', manaCost: 6 },
+    ],
+    augments: [],
+    loadout: {
+      unitIds: [
+        'card_footsoldier',
+        'card_archer',
+        'card_shield_bearer',
+        'card_battle_mage',
+        'card_speed_skater',
+        'card_sticky_runner',
+        'card_bat_flyer',
+        'card_glue_bomber',
+      ],
+      augmentIds: [],
+    },
+  };
 }
 
 /** Puts a saved loadout into slots. Augments map to owned grants (each grant fills one slot). */
@@ -111,7 +216,7 @@ type Status =
   | { kind: 'saved' }
   | { kind: 'save_error'; message: string };
 
-export function DeckBuilderScreen({ onClose }: { onClose: () => void }) {
+export function DeckBuilderScreen({ onClose }: { onClose?: () => void }) {
   const [collection, setCollection] = useState<Collection | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'loading' });
   // Unit slots hold Card ids; augment slots hold grant ids (a specific owned copy)
@@ -250,13 +355,35 @@ export function DeckBuilderScreen({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const randomizeUnits = () => {
+    if (!collection) return;
+    setUnitSlots(pickRandomSlots(collection.cards.map((c) => c.id), LOADOUT_UNIT_SLOTS));
+    setStatus({ kind: 'ready' });
+  };
+
+  const randomizeAugments = () => {
+    if (!collection) return;
+    setAugmentSlots(pickRandomSlots(collection.augments.map((g) => g.grantId), LOADOUT_AUGMENT_SLOTS));
+    setStatus({ kind: 'ready' });
+  };
+
+  const randomizeAll = () => {
+    randomizeUnits();
+    randomizeAugments();
+  };
+
   // ---- Render ----
   const cardsById = new Map(collection?.cards.map((c) => [c.id, c]));
   const grantsById = new Map(collection?.augments.map((g) => [g.grantId, g]));
   const placedUnits = new Set(unitSlots.filter(Boolean));
   const placedGrants = new Set(augmentSlots.filter(Boolean));
 
-  const unitItem = (c: CardData): DragItem => ({ kind: 'unit', key: c.id, title: c.name, subtitle: `${c.type} · ${c.manaCost} mana` });
+  const unitItem = (c: CardData): DragItem => ({
+    kind: 'unit',
+    key: c.id,
+    title: c.name,
+    subtitle: `${c.manaCost}💧 · ${targetLabel(c)}`,
+  });
   const augmentItem = (g: AugmentGrant): DragItem => ({
     kind: 'augment',
     key: g.grantId,
@@ -268,9 +395,11 @@ export function DeckBuilderScreen({ onClose }: { onClose: () => void }) {
   return (
     <View ref={rootRef} style={styles.root} onLayout={measureTargets}>
       <View style={styles.header}>
-        <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && styles.dimmed]}>
-          <Text style={styles.backText}>‹ Back</Text>
-        </Pressable>
+        {onClose && (
+          <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && styles.dimmed]}>
+            <Text style={styles.backText}>‹ Back</Text>
+          </Pressable>
+        )}
         <Text style={styles.title}>Deck Builder</Text>
         <Text style={styles.username}>{collection?.username ?? ''}</Text>
       </View>
@@ -332,9 +461,18 @@ export function DeckBuilderScreen({ onClose }: { onClose: () => void }) {
 
       {/* ---- Bottom half: drop zones ---- */}
       <View style={styles.half}>
-        <Text style={styles.sectionTitle}>
-          Units {placedUnits.size}/{LOADOUT_UNIT_SLOTS}
-        </Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>
+            Units {placedUnits.size}/{LOADOUT_UNIT_SLOTS}
+          </Text>
+          <Pressable
+            style={({ pressed }) => [styles.randomChip, (!collection || pressed) && styles.dimmed]}
+            disabled={!collection}
+            onPress={randomizeUnits}
+          >
+            <Text style={styles.randomChipText}>🎲 Random Troops</Text>
+          </Pressable>
+        </View>
         <View
           ref={(r) => {
             zoneRefs.current.unit = r;
@@ -358,9 +496,21 @@ export function DeckBuilderScreen({ onClose }: { onClose: () => void }) {
           })}
         </View>
 
-        <Text style={styles.sectionTitle}>
-          Augments {placedGrants.size}/{LOADOUT_AUGMENT_SLOTS}
-        </Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>
+            Augments {placedGrants.size}/{LOADOUT_AUGMENT_SLOTS}
+          </Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.randomChip,
+              (!collection || collection.augments.length === 0 || pressed) && styles.dimmed,
+            ]}
+            disabled={!collection || collection.augments.length === 0}
+            onPress={randomizeAugments}
+          >
+            <Text style={styles.randomChipText}>🎲 Random Augments</Text>
+          </Pressable>
+        </View>
         <View
           ref={(r) => {
             zoneRefs.current.augment = r;
@@ -392,6 +542,13 @@ export function DeckBuilderScreen({ onClose }: { onClose: () => void }) {
                 ? `Save failed: ${status.message}`
                 : 'Tap a filled slot to empty it'}
           </Text>
+          <Pressable
+            style={({ pressed }) => [styles.button, styles.secondary, (pressed || !collection) && styles.dimmed]}
+            disabled={!collection}
+            onPress={randomizeAll}
+          >
+            <Text style={styles.buttonText}>🎲 All</Text>
+          </Pressable>
           <Pressable
             style={({ pressed }) => [styles.button, (pressed || status.kind === 'saving' || !collection) && styles.dimmed]}
             disabled={status.kind === 'saving' || !collection}
@@ -517,7 +674,17 @@ const styles = StyleSheet.create({
   error: { color: '#ff8a8a', textAlign: 'center' },
   empty: { color: '#8a8f9c', fontSize: 13, marginBottom: 8 },
   scrollContent: { paddingBottom: 16 },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 4 },
   sectionTitle: { color: '#c9ccd4', fontSize: 13, fontWeight: '800', letterSpacing: 0.5, marginVertical: 6 },
+  randomChip: {
+    backgroundColor: '#2a2e3f',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  randomChipText: { color: '#8fb4ff', fontSize: 11, fontWeight: '800' },
 
   tileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   tile: { width: TILE_WIDTH, height: TILE_HEIGHT },

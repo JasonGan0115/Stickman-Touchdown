@@ -66,6 +66,7 @@ describe("bot", () => {
 
     const tank = think(match, bot, rng);
     assert.equal(tank?.cardId, "card_shield_bearer");
+    match.players[0].spawnCooldownTicks = 0;
     const archer = think(match, bot, rng);
     assert.equal(archer?.cardId, "card_archer");
     assert.ok(Math.abs(archer.x - tank.x) <= 30);

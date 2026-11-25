@@ -1,0 +1,40 @@
+Home Screen
+1. Sticky Deck (collection of augments already implemented inside)
+2. Sticky Home
+3. Sticky Tournament 
+
+Sticky Augments 
+1. Will expired after 24 hours of getting it
+2. Got Silver, Gold and Legendary rarity
+3. Make around 100 augments 
+
+Sticky Deck 
+1. 
+
+Gameplay 
+1. Balanced
+2. 8 sticky troops in deck with weekly reset (sticky troop WILL BE RECYCLE AFTER USED) 
+3. 2s delay time before putting another stick troop
+4. After a sticky troop reached the opposite player touchdown , wins one point and restart the game with 5 sticky liquid
+5. First to 3 wins
+
+
+Testing 
+1. UI/UX testing
+2. Gameplay testing
+3. Bug Testing 
+
+Sticky Troop
+1. Balanced gameplay (testing)
+2. Create 64 troops if can (all with different playstyle) (flying, walking, sliding, running)
+
+Start game:
+1. See the random 4 sticky troops of opponent (different everytime)
+--> Then, Both players choose silver augments
+2. One player have 8 sticky troops
+3. Losing one points get the next 
+
+Sticky Liquid
+1. The thing that used to summon the sticky troops
+2. Start with 3 sticky liquid 
+3. Generate 1 per second

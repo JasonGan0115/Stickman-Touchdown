@@ -5,12 +5,14 @@ import {
   MANA_PER_TICK,
   MATCH_DURATION_MS,
   MAX_MANA,
+  RESET_MANA_ON_SCORE,
+  SPAWN_COOLDOWN_TICKS,
   STARTING_MANA,
   TICK_MS,
   WINNING_SCORE,
 } from "./constants";
 import { combineAugments, type Modifiers } from "./augments";
-import { getUnitStats, resolveHand, type UnitStats, type UnitType } from "./units";
+import { getUnitStats, resolveHand, type MovementType, type UnitStats, type UnitType } from "./units";
 
 // Pure match state + rules. No sockets or timers here, so it can be tested on its own.
 
@@ -26,6 +28,7 @@ export interface Entity {
   id: string;
   cardId: string;
   type: UnitType;
+  movement: MovementType;
   ownerId: string; // socket id of the player who spawned it
   x: number;
   y: number;
@@ -49,7 +52,9 @@ export interface PlayerState {
   mana: number; // fractional; regenerates every tick
   score: number;
   loadout: Loadout;
-  hand: string[]; // card ids this player may spawn (see resolveHand)
+  hand: string[]; // active 4 cards currently in hand
+  drawQueue: string[]; // remaining cards in deck awaiting cycle
+  spawnCooldownTicks: number; // placement cooldown (2s)
   modifiers: Modifiers; // combined augment boosts, applied to every unit this player spawns
 }
 
@@ -77,6 +82,7 @@ export type SpawnRejection =
   | "unknown_card"
   | "card_not_in_hand"
   | "not_enough_mana"
+  | "cooldown_active"
   | "outside_home_endzone";
 
 /** Things that happened during a tick, for logging. */
@@ -86,18 +92,30 @@ export interface TickEvents {
   engaged: { attacker: Entity; target: Entity; attackerHealth: number; targetHealth: number }[];
   hits: { attacker: Entity; target: Entity; splash: boolean }[];
   killed: Entity[];
+  roundReset: boolean;
+}
+
+/** Adds an augment to a player's loadout mid-match and re-computes modifiers. */
+export function applyAugment(player: PlayerState, augmentId: string): void {
+  player.loadout.augmentIds.push(augmentId);
+  player.modifiers = combineAugments(player.loadout.augmentIds);
 }
 
 export function createMatch(id: string, mode: MatchMode, p1: MatchSeat, p2: MatchSeat): Match {
   const now = Date.now();
-  const player = (seat: MatchSeat, number: PlayerNumber): PlayerState => ({
-    ...seat,
-    number,
-    mana: STARTING_MANA,
-    score: 0,
-    hand: resolveHand(seat.loadout.unitIds),
-    modifiers: combineAugments(seat.loadout.augmentIds),
-  });
+  const player = (seat: MatchSeat, number: PlayerNumber): PlayerState => {
+    const { hand, drawQueue } = resolveHand(seat.loadout.unitIds);
+    return {
+      ...seat,
+      number,
+      mana: STARTING_MANA,
+      score: 0,
+      hand,
+      drawQueue,
+      spawnCooldownTicks: 0,
+      modifiers: combineAugments(seat.loadout.augmentIds),
+    };
+  };
   return {
     id,
     mode,
@@ -142,6 +160,7 @@ export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: 
     id: `unit_${match.nextEntityNumber++}`,
     cardId: stats.cardId,
     type: stats.type,
+    movement: stats.movement,
     ownerId: player.id,
     x,
     y,
@@ -168,16 +187,32 @@ export function trySpawn(
   cardId: unknown,
   x: unknown,
   y: unknown,
-): { ok: true; entity: Entity; stats: UnitStats } | { ok: false; reason: SpawnRejection; cost?: number } {
+): { ok: true; entity: Entity; stats: UnitStats; hand: string[]; drawQueue: string[] } | { ok: false; reason: SpawnRejection; cost?: number; cooldownTicks?: number } {
   if (!inRange(x, FIELD_WIDTH) || !inRange(y, FIELD_HEIGHT)) return { ok: false, reason: "invalid_coordinates" };
   const stats = getUnitStats(cardId);
   if (!stats) return { ok: false, reason: "unknown_card" };
   if (!player.hand.includes(stats.cardId)) return { ok: false, reason: "card_not_in_hand" };
+  if (player.spawnCooldownTicks > 0) return { ok: false, reason: "cooldown_active", cooldownTicks: player.spawnCooldownTicks };
   if (player.mana < stats.cost) return { ok: false, reason: "not_enough_mana", cost: stats.cost };
   if (!isInHomeEndzone(player.number, y)) return { ok: false, reason: "outside_home_endzone" };
 
   player.mana -= stats.cost;
-  return { ok: true, entity: addUnit(match, player, stats, x, y), stats };
+  player.spawnCooldownTicks = SPAWN_COOLDOWN_TICKS;
+
+  // Clash Royale style card recycling: replace card in hand with top card from drawQueue
+  if (player.drawQueue.length > 0) {
+    const nextCard = player.drawQueue.shift()!;
+    const handIndex = player.hand.indexOf(stats.cardId);
+    if (handIndex !== -1) {
+      player.hand[handIndex] = nextCard;
+    } else {
+      player.hand.push(nextCard);
+    }
+    player.drawQueue.push(stats.cardId);
+  }
+
+  const entity = addUnit(match, player, stats, x, y);
+  return { ok: true, entity, stats, hand: player.hand, drawQueue: player.drawQueue };
 }
 
 /** Pythagorean distance between two units' centres. */
@@ -189,19 +224,21 @@ function distance(a: Entity, b: Entity): number {
 
 /**
  * Advances the simulation by one tick:
- *   1. regenerate mana (faster with mana regen augments)
- *   2. targeting: each unit locks onto the nearest enemy within its attackRange
+ *   1. regenerate mana & tick down placement cooldowns
+ *   2. targeting: each unit locks onto the nearest reachable enemy within attackRange
  *   3. damage: attacking units hit their target once every attackIntervalTicks;
  *      splash units also hit other enemies within splashRadius of the target
  *   4. remove dead units (health <= 0)
  *   5. move units that aren't attacking; score those reaching the enemy endzone
- * Targeting and damage both read positions/health from the start of the tick,
- * so two units that kill each other on the same tick both die (no first-mover advantage).
+ *   6. touchdown reset: when a touchdown is scored, reset the field with 5 sticky liquid
  */
 export function stepMatch(match: Match): TickEvents {
-  const events: TickEvents = { scored: [], engaged: [], hits: [], killed: [] };
+  const events: TickEvents = { scored: [], engaged: [], hits: [], killed: [], roundReset: false };
 
-  for (const p of match.players) p.mana = Math.min(MAX_MANA, p.mana + MANA_PER_TICK * p.modifiers.manaRegen);
+  for (const p of match.players) {
+    p.mana = Math.min(MAX_MANA, p.mana + MANA_PER_TICK * p.modifiers.manaRegen);
+    if (p.spawnCooldownTicks > 0) p.spawnCooldownTicks--;
+  }
 
   // 2. Targeting
   const targets = new Map<Entity, Entity>();
@@ -210,6 +247,10 @@ export function stepMatch(match: Match): TickEvents {
     let nearestDist = Infinity;
     for (const other of match.entities) {
       if (other.ownerId === unit.ownerId) continue;
+      // Ground Melee & Tank units only attack ground troops; Ranged, Caster, and Flying units attack both Air & Ground
+      if (other.movement === "flying" && unit.movement !== "flying" && unit.type !== "Ranged" && unit.type !== "Caster") {
+        continue;
+      }
       const d = distance(unit, other);
       if (d <= unit.attackRange && d < nearestDist) {
         nearest = other;
@@ -275,6 +316,16 @@ export function stepMatch(match: Match): TickEvents {
     survivors.push(unit);
   }
   match.entities = survivors;
+
+  // 6. Touchdown round reset: wipe active units, give both players 5 sticky liquid, reset cooldowns
+  if (events.scored.length > 0 && !getScoreLimitWinner(match)) {
+    match.entities = [];
+    events.roundReset = true;
+    for (const p of match.players) {
+      p.mana = RESET_MANA_ON_SCORE;
+      p.spawnCooldownTicks = 0;
+    }
+  }
 
   return events;
 }

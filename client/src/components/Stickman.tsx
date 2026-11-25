@@ -11,7 +11,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 
-import type { UnitType } from '../store/useGameStore';
+import type { MovementType, UnitType } from '../store/useGameStore';
 
 // Performance: the drawings are never redrawn while a unit moves. The body is
 // one still SVG, and the legs and weapon arm are separate pieces that are
@@ -157,6 +157,7 @@ function WeaponArm({ swing, design, team, size }: { swing: SharedValue<number>; 
 
 interface Props {
   type: UnitType;
+  movement?: MovementType;
   teamColor: string;
   size: number;
   /** Legs move while true */
@@ -167,7 +168,7 @@ interface Props {
   animated?: boolean;
 }
 
-function StickmanBase({ type, teamColor, size, walking = false, attackTick = -1, animated = true }: Props) {
+function StickmanBase({ type, movement, teamColor, size, walking = false, attackTick = -1, animated = true }: Props) {
   const design = DESIGNS[type];
   const phase = useSharedValue(0); // -1..1, leg swing
   const swing = useSharedValue(0); // degrees, weapon arm
@@ -192,11 +193,24 @@ function StickmanBase({ type, teamColor, size, walking = false, attackTick = -1,
   }, [attackTick, animated, design.swingDeg, swing]);
 
   const w = design.lineWidth;
+  const isFlying = movement === 'flying';
+  const isRunning = movement === 'running';
+  const isSliding = movement === 'sliding';
+
   return (
-    <View style={{ width: size, height: size }}>
+    <View style={{ width: size, height: size, transform: isRunning ? [{ skewX: '-10deg' }] : [] }}>
       <Leg phase={phase} direction={1} design={design} k={k} />
       <Leg phase={phase} direction={-1} design={design} k={k} />
       <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}>
+        {isFlying && (
+          <>
+            <Path d="M22 36 Q6 18 14 46 Q24 42 30 38 Z" fill="#93c5fd" opacity={0.85} />
+            <Path d="M78 36 Q94 18 86 46 Q76 42 70 38 Z" fill="#93c5fd" opacity={0.85} />
+          </>
+        )}
+        {isSliding && (
+          <Line x1={28} y1={HIP.y + LEG_LENGTH} x2={72} y2={HIP.y + LEG_LENGTH} stroke="#38bdf8" strokeWidth={3} strokeLinecap="round" />
+        )}
         <Line x1={50} y1={24 + design.headR} x2={HIP.x} y2={HIP.y} stroke={BODY} strokeWidth={w} strokeLinecap="round" />
         {/* Back arm */}
         <Line x1={design.shoulder.x} y1={design.shoulder.y} x2={36} y2={54} stroke={BODY} strokeWidth={w} strokeLinecap="round" />

@@ -93,6 +93,12 @@ if ($listener) {
     }
 }
 
+# The adapter with a default gateway is the real network (not WSL, VMware or other virtual adapters)
+$ip = Get-NetIPConfiguration -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } |
+    Select-Object -First 1 -ExpandProperty IPv4Address |
+    Select-Object -First 1 -ExpandProperty IPAddress
+
 # --- 4. Open the terminals -------------------------------------------------
 Write-Step 'Opening the game server and Expo app'
 $tabs = @()
@@ -100,6 +106,7 @@ if ($startServer) { $tabs += @{ Title = 'Game server'; Dir = $serverDir; Command
 if (Test-Listening $expoPort) {
     Write-Host "`n  The Expo app is already running (port $expoPort); not starting another." -ForegroundColor Yellow
 } else {
+    if ($ip) { $env:REACT_NATIVE_PACKAGER_HOSTNAME = $ip }
     $tabs += @{ Title = 'Expo app'; Dir = $clientDir; Command = 'npx expo start' }
 }
 
@@ -125,12 +132,6 @@ if ($wt) {
         Start-Process powershell -WorkingDirectory $t.Dir -ArgumentList '-NoExit', '-Command', "`$Host.UI.RawUI.WindowTitle = '$($t.Title)'; $($t.Command)"
     }
 }
-
-# The adapter with a default gateway is the real network (not WSL, VMware or other virtual adapters)
-$ip = Get-NetIPConfiguration -ErrorAction SilentlyContinue |
-    Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } |
-    Select-Object -First 1 -ExpandProperty IPv4Address |
-    Select-Object -First 1 -ExpandProperty IPAddress
 
 Write-Host "`nAll started." -ForegroundColor Green
 Write-Host '  - Scan the QR code in the "Expo app" tab with Expo Go.'
