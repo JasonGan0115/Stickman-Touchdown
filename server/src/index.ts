@@ -95,6 +95,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, label: str
 // ---------------------------------------------------------------------------
 
 const app = express();
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 app.use(express.json());
 app.use("/player", playerRouter);
 
@@ -329,17 +339,14 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
     return;
   }
 
-  const [troopLevelsA, troopLevelsB] = await Promise.all([
-    withTimeout(getPlayerTroopLevels(a.data.username), LOADOUT_LOOKUP_TIMEOUT_MS, {}, `troopLevels ${a.data.username}`),
-    withTimeout(getPlayerTroopLevels(b.data.username), LOADOUT_LOOKUP_TIMEOUT_MS, {}, `troopLevels ${b.data.username}`),
-  ]);
-
+  // Normalize troop levels to Lv. 1 in Ranked 1v1 / Mirror Tournament for fair PvP;
+  // players still earn troop XP from every match played.
   const matchId = `match_${randomUUID().slice(0, 8)}`;
   const match = createMatch(
     matchId,
     mode,
-    { id: a.id, username: a.data.username, loadout: loadoutA, troopLevels: troopLevelsA },
-    { id: b.id, username: b.data.username, loadout: loadoutB, troopLevels: troopLevelsB },
+    { id: a.id, username: a.data.username, loadout: loadoutA, troopLevels: {} },
+    { id: b.id, username: b.data.username, loadout: loadoutB, troopLevels: {} },
   );
 
   launchMatch(match, [a, b], tournament);

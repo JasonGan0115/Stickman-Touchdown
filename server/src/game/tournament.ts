@@ -1,5 +1,9 @@
 import { errorSummary, prisma } from "../db";
+import { AUGMENTS } from "./augments";
+import { seededRng } from "./bot";
+import { LOADOUT_AUGMENT_SLOTS, LOADOUT_UNIT_SLOTS } from "./constants";
 import type { Loadout } from "./match";
+import { UNIT_STATS } from "./units";
 
 export interface WeeklyTournamentConfig {
   id: string;
@@ -10,33 +14,48 @@ export interface WeeklyTournamentConfig {
   augments: { id: string; name: string; rarity: string }[];
 }
 
-// This week's rules. Hardcoded for now; the ids match prisma/seed.ts.
-// Later this could be loaded from a database table or remote config.
-const WEEKLY_TOURNAMENT: { id: string; name: string; loadout: Loadout } = {
-  id: "weekly_2026_w46",
-  name: "Weekly Tournament: Mirror Match",
-  loadout: {
-    unitIds: ["card_footsoldier", "card_archer", "card_shield_bearer", "card_battle_mage"],
-    augmentIds: [
-      "aug_swift_boots",
-      "aug_iron_skin",
-      "aug_quick_hands",
-      "aug_mana_surge",
-      "aug_berserker_rage",
-      "aug_eagle_eye",
-      "aug_titans_blessing",
-      "aug_phoenix_heart",
-    ],
-  },
-};
+/** Returns ISO-8601 week year, week number (1-53), and tournament id for `date`. */
+export function getIsoWeekKey(date: Date = new Date()): { year: number; week: number; id: string } {
+  const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNum = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((utc.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  const year = utc.getUTCFullYear();
+  return { year, week, id: `weekly_${year}_w${String(week).padStart(2, "0")}` };
+}
+
+function pickDeterministic(pool: string[], count: number, seed: number): string[] {
+  const arr = [...pool].sort();
+  const rng = seededRng(seed);
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr.slice(0, Math.min(count, arr.length));
+}
+
+/** Deterministically builds the 8-troop, 8-augment mirror loadout for the given date's ISO week. */
+export function getWeeklyTournamentLoadout(date: Date = new Date()): { id: string; name: string; loadout: Loadout } {
+  const { year, week, id } = getIsoWeekKey(date);
+  const seed = year * 100 + week;
+  return {
+    id,
+    name: "Weekly Tournament: Mirror Match",
+    loadout: {
+      unitIds: pickDeterministic(Object.keys(UNIT_STATS), LOADOUT_UNIT_SLOTS, seed),
+      augmentIds: pickDeterministic(Object.keys(AUGMENTS), LOADOUT_AUGMENT_SLOTS, seed + 997),
+    },
+  };
+}
 
 /**
  * Returns this week's tournament config with display names filled in from the
- * database. If the database can't be reached the ids are still returned (and
- * still forced on both players); only the names fall back to the ids.
+ * database (falling back to in-memory catalog names if DB is unavailable).
  */
-export async function getWeeklyTournamentConfig(): Promise<WeeklyTournamentConfig> {
-  const { unitIds, augmentIds } = WEEKLY_TOURNAMENT.loadout;
+export async function getWeeklyTournamentConfig(date: Date = new Date()): Promise<WeeklyTournamentConfig> {
+  const weekly = getWeeklyTournamentLoadout(date);
+  const { unitIds, augmentIds } = weekly.loadout;
   let cardNames = new Map<string, string>();
   let augmentInfo = new Map<string, { name: string; rarity: string }>();
 
@@ -47,18 +66,19 @@ export async function getWeeklyTournamentConfig(): Promise<WeeklyTournamentConfi
     ]);
     cardNames = new Map(cards.map((c) => [c.id, c.name]));
     augmentInfo = new Map(augments.map((a) => [a.id, { name: a.name, rarity: a.rarity }]));
-
-    const missing = [...unitIds, ...augmentIds].filter((id) => !cardNames.has(id) && !augmentInfo.has(id));
-    if (missing.length) console.warn(`[tournament] config ids not found in database (run the seed?): ${missing.join(", ")}`);
   } catch (err) {
-    console.warn("[tournament] could not load names from database; using ids:", errorSummary(err));
+    console.warn("[tournament] could not load names from database; using catalog:", errorSummary(err));
   }
 
   return {
-    id: WEEKLY_TOURNAMENT.id,
-    name: WEEKLY_TOURNAMENT.name,
+    id: weekly.id,
+    name: weekly.name,
     loadout: { unitIds: [...unitIds], augmentIds: [...augmentIds] },
-    units: unitIds.map((id) => ({ id, name: cardNames.get(id) ?? id })),
-    augments: augmentIds.map((id) => ({ id, name: augmentInfo.get(id)?.name ?? id, rarity: augmentInfo.get(id)?.rarity ?? "Unknown" })),
+    units: unitIds.map((id) => ({ id, name: cardNames.get(id) ?? UNIT_STATS[id]?.name ?? id })),
+    augments: augmentIds.map((id) => ({
+      id,
+      name: augmentInfo.get(id)?.name ?? AUGMENTS[id]?.name ?? id,
+      rarity: augmentInfo.get(id)?.rarity ?? AUGMENTS[id]?.rarity ?? "Unknown",
+    })),
   };
 }
