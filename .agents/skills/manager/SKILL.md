@@ -19,6 +19,7 @@ You are the **Project Manager** for **Stickman Touchdown (Touchdown PVP)**. Your
 
 | Specialist Skill | Owns |
 | :--- | :--- |
+| `idea-validator` | Stress-tests new game/video ideas for logic, edge cases, balance, and feasibility |
 | `game-builder` | Features, bug fixes, UI, and server logic in `client/` and `server/` |
 | `game-balancer` | Balancing troops, augments, troop levels, and VS AI Levels 1–100 (`balanceSim.ts`) |
 | `game-testing` | Unit/regression tests, balance simulation, and client lint |
