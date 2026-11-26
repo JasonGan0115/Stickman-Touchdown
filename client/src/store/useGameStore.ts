@@ -133,6 +133,9 @@ export interface GameState {
   isConnected: boolean;
   localSocketId: string | null; // our socket id; compared against roomPlayers to find our seat
   username: string | null;
+  onlineCount: number | null;
+  totalTesters: number | null;
+  reconnectInSec: number | null;
   matchStatus: MatchStatus;
   queueMode: MatchMode | null;
 
@@ -168,6 +171,8 @@ export interface GameState {
   debugFlipView: boolean;
 
   setConnected: (isConnected: boolean, identity?: { socketId: string; username: string }) => void;
+  setOnlineCount: (onlineCount: number, totalTesters?: number | null) => void;
+  setReconnectInSec: (reconnectInSec: number | null) => void;
   setQueued: (mode: MatchMode) => void;
   startMatch: (info: MatchStartInfo) => void;
   setHandUpdate: (hand: HandCard[], nextCard: HandCard | null) => void;
@@ -216,6 +221,9 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
   isConnected: false,
   localSocketId: null,
   username: null,
+  onlineCount: null,
+  totalTesters: null,
+  reconnectInSec: null,
   debugFlipView: false,
   ...initialMatchState,
 
@@ -223,9 +231,16 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
     // Losing the connection drops us from the queue/match on the server, so clear match state too
     set(
       isConnected
-        ? { isConnected, localSocketId: identity?.socketId ?? null, username: identity?.username ?? null }
-        : { isConnected, localSocketId: null, ...initialMatchState },
+        ? {
+            isConnected,
+            localSocketId: identity?.socketId ?? null,
+            username: identity?.username ?? null,
+            reconnectInSec: null,
+          }
+        : { isConnected, localSocketId: null, onlineCount: null, totalTesters: null, ...initialMatchState },
     ),
+  setOnlineCount: (onlineCount, totalTesters = null) => set({ onlineCount, totalTesters }),
+  setReconnectInSec: (reconnectInSec) => set({ reconnectInSec }),
   setQueued: (queueMode) => set({ ...initialMatchState, matchStatus: 'queued', queueMode }),
   startMatch: ({ roomID, mode, roomPlayers, loadout, hand, nextCard, opponentPreview, silverDraftOptions, boosts, ai, durationMs }) =>
     set({

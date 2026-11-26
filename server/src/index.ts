@@ -37,8 +37,9 @@ import { describeModifiers, getDraftOptions } from "./game/augments";
 import { getAIBonus } from "./game/ai";
 import { botTick, createBot, type BotState } from "./game/bot";
 import { DEFAULT_HAND, getUnitStats, handCardInfo, resolveDeck, sampleRandomCards } from "./game/units";
-import { EMPTY_LOADOUT, getMatchLoadout, USERNAME_PATTERN } from "./players";
+import { EMPTY_LOADOUT, ensurePlayer, getMatchLoadout, USERNAME_PATTERN } from "./players";
 import { playerRouter } from "./routes/player";
+import { formatInstagramCaption, publishStatsToInstagram, renderInstagramCardSvg } from "./instagram";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -109,6 +110,8 @@ const queuedIn = new Map<string, MatchMode>(); // socket id -> which queue it's 
 const pairing = new Set<string>(); // sockets paired but waiting for loadouts to load
 const matches = new Map<string, Match>(); // matchId -> match
 const playerMatch = new Map<string, string>(); // socket id -> matchId
+const seenTesters = new Set<string>(); // fallback unique usernames if DB is unavailable
+let cachedTotalTesters = 0;
 // Practice matches against the computer: matchId -> (player id -> bot brain).
 // A bot seat's id is "bot_..." with no socket behind it; with autoplay the
 // human's own seat gets a bot brain too, so they can watch AI vs AI.
@@ -117,12 +120,45 @@ const matchAiDifficulty = new Map<string, number>();
 const isBotControlled = (match: Match, playerId: string) => matchBots.get(match.id)?.has(playerId) ?? false;
 const isBotSeat = (playerId: string) => playerId.startsWith("bot_");
 
+function getLiveGameStats() {
+  return {
+    onlinePlayers: io.sockets.sockets.size,
+    totalTesters: Math.max(cachedTotalTesters, seenTesters.size),
+    activeMatches: matches.size,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 app.get("/health", (_req, res) => {
+  const stats = getLiveGameStats();
   res.json({
     ok: true,
+    onlinePlayers: stats.onlinePlayers,
+    totalTesters: stats.totalTesters,
     queued: { standard: queues.standard.length, tournament: queues.tournament.length },
-    activeMatches: matches.size,
+    activeMatches: stats.activeMatches,
   });
+});
+
+app.get("/stats/live", (_req, res) => {
+  const stats = getLiveGameStats();
+  res.json({ ...stats, caption: formatInstagramCaption(stats) });
+});
+
+app.get("/stats/instagram-card.svg", (_req, res) => {
+  res.type("image/svg+xml").send(renderInstagramCardSvg(getLiveGameStats()));
+});
+
+app.post("/stats/instagram/publish", async (req, res) => {
+  const stats = getLiveGameStats();
+  const body = (req.body ?? {}) as { imageUrl?: unknown; mediaId?: unknown };
+  const result = await publishStatsToInstagram(stats, {
+    igUserId: process.env.INSTAGRAM_USER_ID,
+    accessToken: process.env.INSTAGRAM_ACCESS_TOKEN,
+    imageUrl: typeof body.imageUrl === "string" ? body.imageUrl : process.env.INSTAGRAM_IMAGE_URL,
+    mediaId: typeof body.mediaId === "string" ? body.mediaId : process.env.INSTAGRAM_MEDIA_ID,
+  });
+  res.status(result.ok ? 200 : result.configured ? 502 : 400).json(result);
 });
 
 // ---------------------------------------------------------------------------
@@ -660,9 +696,29 @@ async function startBotMatch(socket: Socket, autoplay: boolean, difficulty?: num
 // Socket events
 // ---------------------------------------------------------------------------
 
+function broadcastOnlineCount(): void {
+  io.emit("online_count", {
+    count: io.sockets.sockets.size,
+    totalTesters: Math.max(cachedTotalTesters, seenTesters.size),
+  });
+}
+
+async function refreshTotalTesters(username: string): Promise<void> {
+  seenTesters.add(username);
+  try {
+    await ensurePlayer(username);
+    cachedTotalTesters = await prisma.player.count();
+  } catch {
+    // DB unavailable; fall back to in-memory unique usernames
+  }
+  broadcastOnlineCount();
+}
+
 io.on("connection", (socket) => {
   socket.data.username = resolveUsername(socket);
   debugLog("conn", `socket ${socket.id} (${socket.data.username}) connected (${io.sockets.sockets.size} online)`);
+  broadcastOnlineCount();
+  void refreshTotalTesters(socket.data.username);
 
   socket.on("join_queue", () => joinQueue(socket, "standard"));
   socket.on("join_tournament_queue", () => joinQueue(socket, "tournament"));
@@ -762,6 +818,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", (reason) => {
     debugLog("conn", `socket ${socket.id} disconnected: ${reason} (${io.sockets.sockets.size} online)`);
+    broadcastOnlineCount();
     if (removeFromQueue(socket.id)) debugLog("queue", `socket ${socket.id} removed from queue on disconnect`);
 
     const matchId = playerMatch.get(socket.id);

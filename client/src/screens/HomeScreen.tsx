@@ -24,6 +24,9 @@ interface Props {
 export function HomeScreen({ store, service, onSelectTab }: Props) {
   const isConnected = useStore(store, (s) => s.isConnected);
   const username = useStore(store, (s) => s.username);
+  const onlineCount = useStore(store, (s) => s.onlineCount);
+  const totalTesters = useStore(store, (s) => s.totalTesters);
+  const reconnectInSec = useStore(store, (s) => s.reconnectInSec);
   const [aiLevel, setAiLevel] = useState(1);
   const [clearedLevels, setClearedLevels] = useState<number[]>([]);
 
@@ -65,11 +68,27 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
       {/* Player Header */}
       <View style={styles.header}>
         <Text style={styles.logo}>🏈 TOUCHDOWN PVP</Text>
-        <View style={styles.userBadge}>
-          <Text style={[styles.statusDot, { color: isConnected ? '#2e9e5b' : '#c0392b' }]}>●</Text>
-          <Text style={styles.usernameText}>
-            {isConnected ? username ?? 'Player' : 'Connecting to Server…'}
-          </Text>
+        <View style={styles.headerBadges}>
+          <View style={styles.userBadge}>
+            <Text style={[styles.statusDot, { color: isConnected ? '#2e9e5b' : '#c0392b' }]}>●</Text>
+            <Text style={styles.usernameText}>
+              {isConnected
+                ? username ?? 'Player'
+                : reconnectInSec !== null && reconnectInSec > 0
+                  ? `Connecting to Server… (${reconnectInSec}s)`
+                  : 'Connecting to Server…'}
+            </Text>
+          </View>
+          {isConnected && onlineCount !== null && (
+            <View style={styles.onlineBadge}>
+              <Text style={styles.onlineText}>👥 {onlineCount} online</Text>
+            </View>
+          )}
+          {isConnected && totalTesters !== null && (
+            <View style={styles.testersBadge}>
+              <Text style={styles.testersText}>🧪 {totalTesters} tested</Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -235,8 +254,9 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
 const styles = StyleSheet.create({
   scroll: { flex: 1, alignSelf: 'stretch' },
   container: { padding: 16, paddingBottom: 40, gap: 14, alignItems: 'center' },
-  header: { alignItems: 'center', gap: 4, marginVertical: 4 },
+  header: { alignItems: 'center', gap: 6, marginVertical: 4 },
   logo: { color: '#fff', fontSize: 28, fontWeight: '900', letterSpacing: 1.5 },
+  headerBadges: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' },
   userBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -248,6 +268,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
   },
+  onlineBadge: {
+    backgroundColor: 'rgba(6, 214, 160, 0.12)',
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 214, 160, 0.35)',
+  },
+  onlineText: { color: '#06d6a0', fontSize: 12, fontWeight: '700' },
+  testersBadge: {
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.35)',
+  },
+  testersText: { color: '#38bdf8', fontSize: 12, fontWeight: '700' },
   statusDot: { fontSize: 10 },
   usernameText: { color: '#c9ccd4', fontSize: 12, fontWeight: '700' },
 

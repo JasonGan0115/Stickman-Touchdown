@@ -84,7 +84,9 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
     if (!scale) return;
     // Every child of the wrapper has pointerEvents 'none', so locationX/Y are relative
     // to the unrotated wrapper: plain screen-space pixels within the board.
-    const { locationX, locationY } = e.nativeEvent;
+    const native = e.nativeEvent as unknown as { locationX?: number; locationY?: number; offsetX?: number; offsetY?: number };
+    const locationX = native.locationX ?? native.offsetX ?? 0;
+    const locationY = native.locationY ?? native.offsetY ?? 0;
     const screenX = locationX / scale; // in world units, but as seen on screen
     const screenY = locationY / scale;
 
@@ -135,7 +137,7 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
       <DraftModal store={store} service={service} />
       <View style={styles.area} onLayout={onLayout}>
         {scale > 0 && (
-          <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn}>
+          <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn} onPress={() => {}}>
             {/* The game board, in world coordinates, rotated for Player 2 */}
             <View style={[styles.board, flipped && styles.rotated]}>
               <FieldStripes flipped={flipped} />

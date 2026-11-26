@@ -19,6 +19,7 @@ import {
 } from '../store/useGameStore';
 
 const SERVER_PORT = 3100; // the game server's port; matches PORT in server/src/index.ts
+const RECONNECT_DELAY_SEC = 5;
 
 // "localhost" on a phone or emulator means the phone itself, not your computer.
 // In development, Expo knows the LAN address of the machine running Metro
@@ -88,6 +89,7 @@ export class SocketService {
   private socket: Socket | null = null;
   private wantConnected = false;
   private usernamePromise: Promise<string> | null = null;
+  private countdownTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly store: GameStore,
@@ -130,13 +132,50 @@ export class SocketService {
       transports: ['websocket'], // the HTTP long-polling fallback is unreliable in React Native
       forceNew: true, // never share a connection with another SocketService, or the server sees one player
       auth: { username },
+      reconnectionDelay: RECONNECT_DELAY_SEC * 1000,
+      reconnectionDelayMax: RECONNECT_DELAY_SEC * 1000,
+      randomizationFactor: 0,
     });
     this.socket = socket;
     const state = this.store.getState;
 
-    socket.on('connect', () => state().setConnected(true, { socketId: socket.id!, username }));
-    socket.on('disconnect', () => state().setConnected(false));
-    socket.on('connect_error', (err) => console.warn(`[socket:${this.label}] connect_error: ${err.message}`));
+    const clearCountdown = () => {
+      if (this.countdownTimer) {
+        clearInterval(this.countdownTimer);
+        this.countdownTimer = null;
+      }
+      state().setReconnectInSec(null);
+    };
+
+    const startCountdown = () => {
+      if (this.countdownTimer) clearInterval(this.countdownTimer);
+      let remaining = RECONNECT_DELAY_SEC;
+      state().setReconnectInSec(remaining);
+      this.countdownTimer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearCountdown();
+        } else {
+          state().setReconnectInSec(remaining);
+        }
+      }, 1000);
+    };
+
+    socket.on('connect', () => {
+      clearCountdown();
+      state().setConnected(true, { socketId: socket.id!, username });
+    });
+    socket.on('disconnect', () => {
+      state().setConnected(false);
+      if (this.wantConnected) startCountdown();
+    });
+    socket.on('online_count', ({ count, totalTesters }: { count: number; totalTesters?: number }) =>
+      state().setOnlineCount(count, typeof totalTesters === 'number' ? totalTesters : null),
+    );
+    socket.on('connect_error', (err) => {
+      console.warn(`[socket:${this.label}] connect_error: ${err.message}`);
+      if (this.wantConnected) startCountdown();
+    });
 
     socket.on('queue_joined', ({ mode }: { mode: MatchMode }) => state().setQueued(mode));
     socket.on('queue_error', ({ message }: { message: string }) =>
@@ -197,6 +236,11 @@ export class SocketService {
 
   disconnect(): void {
     this.wantConnected = false;
+    if (this.countdownTimer) {
+      clearInterval(this.countdownTimer);
+      this.countdownTimer = null;
+    }
+    this.store.getState().setReconnectInSec(null);
     this.socket?.disconnect();
     this.socket = null;
   }
