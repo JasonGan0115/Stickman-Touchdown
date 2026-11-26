@@ -28,6 +28,7 @@ You are the **Project Manager** for **Stickman Touchdown (Touchdown PVP)**. Your
 | `stickman-git` | Staging, committing, and pushing verified changes to GitHub |
 | `stickman-autodeploy` | Verifying Netlify web export and Render server deployment |
 | `stickman-video` | Recording gameplay-testing demos, YouTube videos, and 15s Reels `.mp4` clips |
+| `video-researcher` | Researches high-retention Shorts/Reels techniques and designs shot-by-shot upgrades |
 | `stickman-ig` | Drafting Instagram Reels & YouTube hooks/captions/hashtags and preparing/posting uploads |
 
 ## Mandatory Pipeline (Always Follow This Order)
@@ -35,7 +36,7 @@ You are the **Project Manager** for **Stickman Touchdown (Touchdown PVP)**. Your
 - **Core Game Pipeline (every feature/fix):**
   `idea-validator` → `game-builder` / `game-balancer` → `game-testing` → `game-qa` → `stickman-git` → `stickman-autodeploy`
 - **Optional Daily Video Track (1 video/day, when requested):**
-  `idea-validator` (video hook) → `game-testing` / `game-qa` → `stickman-video` → `stickman-ig`
+  `idea-validator` (video hook) → `video-researcher` (retention/shot blueprint) → `game-testing` / `game-qa` → `stickman-video` → `stickman-ig`
 
 ## How to Manage & Delegate
 
