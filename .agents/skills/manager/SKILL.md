@@ -25,6 +25,7 @@ You are the **Project Manager** for **Stickman Touchdown (Touchdown PVP)**. Your
 | `game-balancer` | Balancing troops, augments, troop levels, and VS AI Levels 1–100 (`balanceSim.ts`) |
 | `game-testing` | Unit/regression tests, balance simulation, and client lint |
 | `game-qa` | End-to-end live UI/gameplay QA and video quality check before shipping/posting |
+| `game-critic` | Brutally honest, mostly negative critique comparing Touchdown PVP to Clash Royale |
 | `stickman-git` | Staging, committing, and pushing verified changes to GitHub |
 | `stickman-autodeploy` | Verifying Netlify web export and Render server deployment |
 | `stickman-video` | Recording gameplay-testing demos, YouTube videos, and 15s Reels `.mp4` clips |
