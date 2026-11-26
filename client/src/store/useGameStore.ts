@@ -82,10 +82,22 @@ export interface GameOverInfo {
   practice?: boolean; // vs the AI: no rewards
 }
 
+export interface TroopXpGain {
+  cardId: string;
+  name: string;
+  xpGained: number;
+  totalXp: number;
+  previousLevel: number;
+  newLevel: number;
+  xpIntoLevel: number;
+  xpForNextLevel: number;
+}
+
 /** Sent once rewards have been written to the database ('match_results'). */
 export interface MatchResults {
   result: GameOverInfo['result'];
   rewards: { xpGained: number; totalXp: number; augment: AugmentReward | null } | null;
+  troopGains?: TroopXpGain[];
   rewardsSaved: boolean;
   rewardsError?: string;
 }
@@ -158,6 +170,7 @@ export interface GameState {
   mana: number; // 0..MAX_MANA, fractional
   spawnCooldownRemainingMs: number; // 2s placement cooldown remaining
   touchdownBanner: boolean; // displays Touchdown celebration and kickoff reset
+  lastTouchdownBy: 'you' | 'opponent' | null; // who scored the most recent touchdown
   score: Score;
   entities: Entity[];
   effects: Effect[]; // short-lived visuals: arrows, damage numbers, falling units
@@ -209,6 +222,7 @@ const initialMatchState = {
   mana: 0,
   spawnCooldownRemainingMs: 0,
   touchdownBanner: false,
+  lastTouchdownBy: null as 'you' | 'opponent' | null,
   score: { you: 0, opponent: 0 },
   entities: [] as Entity[],
   effects: [] as Effect[],
@@ -273,6 +287,8 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
     set((s) => {
       const now = Date.now();
       const fresh = deriveEffects(s.entities, entities, killed, now);
+      const scorer: 'you' | 'opponent' | null =
+        score.you > s.score.you ? 'you' : score.opponent > s.score.opponent ? 'opponent' : s.lastTouchdownBy;
       return {
         matchTimer: timeRemainingMs,
         mana,
@@ -280,12 +296,22 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
         entities,
         spawnCooldownRemainingMs,
         touchdownBanner: roundReset ? true : s.touchdownBanner,
+        lastTouchdownBy: roundReset ? scorer : s.lastTouchdownBy,
         effects: updateEffects(s.effects, fresh, now),
       };
     }),
   setSpawnError: (message) => set({ spawnError: message ? { message, at: Date.now() } : null }),
   setGameOver: (gameOver) =>
-    set({ matchStatus: 'ended', gameOver, matchResults: null, entities: [], effects: [], roomID: null, touchdownBanner: false }),
+    set({
+      matchStatus: 'ended',
+      gameOver,
+      matchResults: null,
+      entities: [],
+      effects: [],
+      roomID: null,
+      touchdownBanner: false,
+      lastTouchdownBy: null,
+    }),
   setMatchResults: (matchResults) => set({ matchResults }),
   toggleDebugFlipView: () => set((s) => ({ debugFlipView: !s.debugFlipView })),
   reset: () => set(initialMatchState),

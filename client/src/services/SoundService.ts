@@ -48,6 +48,39 @@ class SoundService {
         // ignore
       }
     }
+    if (this.soundEnabled) {
+      this.playWebTouchdownFanfare();
+    }
+  }
+
+  /** Synthesized stadium horn + rising chord on web browsers */
+  private playWebTouchdownFanfare() {
+    try {
+      const w = globalThis as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
+      const Ctx = w.AudioContext ?? w.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const now = ctx.currentTime;
+      const notes = [261.63, 329.63, 392.0, 523.25]; // C4-E4-G4-C5 fanfare chord
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = i === 0 ? 'sawtooth' : 'triangle';
+        osc.frequency.setValueAtTime(freq, now + i * 0.045);
+        gain.gain.setValueAtTime(0.001, now + i * 0.045);
+        gain.gain.exponentialRampToValueAtTime(0.08, now + i * 0.045 + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * 0.045);
+        osc.stop(now + 0.7);
+      });
+      setTimeout(() => {
+        ctx.close().catch(() => {});
+      }, 900);
+    } catch {
+      // ignore if audio context is blocked or unavailable
+    }
   }
 
   /** Whistle blow at match start or kickoff */

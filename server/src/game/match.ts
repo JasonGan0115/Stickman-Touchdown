@@ -12,6 +12,7 @@ import {
   WINNING_SCORE,
 } from "./constants";
 import { combineAugments, type Modifiers } from "./augments";
+import { getTroopStatMultiplier } from "./troopLevels";
 import { getUnitStats, resolveHand, type MovementType, type UnitStats, type UnitType } from "./units";
 
 // Pure match state + rules. No sockets or timers here, so it can be tested on its own.
@@ -56,6 +57,8 @@ export interface PlayerState {
   drawQueue: string[]; // remaining cards in deck awaiting cycle
   spawnCooldownTicks: number; // placement cooldown (2s)
   modifiers: Modifiers; // combined augment boosts, applied to every unit this player spawns
+  troopLevels: Record<string, number>; // cardId -> troop level (1..100)
+  playedCardCounts: Record<string, number>; // cardId -> spawn count during this match
 }
 
 export interface Match {
@@ -75,6 +78,7 @@ export interface MatchSeat {
   id: string;
   username: string;
   loadout: Loadout;
+  troopLevels?: Record<string, number>;
 }
 
 export type SpawnRejection =
@@ -114,6 +118,8 @@ export function createMatch(id: string, mode: MatchMode, p1: MatchSeat, p2: Matc
       drawQueue,
       spawnCooldownTicks: 0,
       modifiers: combineAugments(seat.loadout.augmentIds),
+      troopLevels: seat.troopLevels ?? {},
+      playedCardCounts: {},
     };
   };
   return {
@@ -155,7 +161,8 @@ const inRange = (n: unknown, max: number): n is number =>
  */
 export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: number, y: number): Entity {
   const mods = player.modifiers;
-  const health = Math.round(stats.health * mods.health);
+  const levelMult = getTroopStatMultiplier(player.troopLevels?.[stats.cardId] ?? 1);
+  const health = Math.round(stats.health * mods.health * levelMult);
   const entity: Entity = {
     id: `unit_${match.nextEntityNumber++}`,
     cardId: stats.cardId,
@@ -166,7 +173,7 @@ export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: 
     y,
     health,
     maxHealth: health,
-    damage: Math.round(stats.damage * mods.damage),
+    damage: Math.round(stats.damage * mods.damage * levelMult),
     attackRange: stats.attackRange * mods.range,
     attackIntervalTicks: Math.max(1, Math.round(stats.attackIntervalTicks / mods.attackSpeed)),
     speed: stats.speed * mods.speed,
@@ -212,6 +219,7 @@ export function trySpawn(
   }
 
   const entity = addUnit(match, player, stats, x, y);
+  player.playedCardCounts[stats.cardId] = (player.playedCardCounts[stats.cardId] ?? 0) + 1;
   return { ok: true, entity, stats, hand: player.hand, drawQueue: player.drawQueue };
 }
 

@@ -31,13 +31,13 @@ import {
   type PlayerState,
   type TickEvents,
 } from "./game/match";
-import { grantMatchReward, REWARD_PACKAGES, type PlayerReward } from "./game/rewards";
+import { grantMatchReward, grantTroopXp, REWARD_PACKAGES, type PlayerReward, type TroopXpGain } from "./game/rewards";
 import { getWeeklyTournamentConfig, type WeeklyTournamentConfig } from "./game/tournament";
 import { describeModifiers, getDraftOptions } from "./game/augments";
 import { getAIBonus } from "./game/ai";
 import { botTick, createBot, type BotState } from "./game/bot";
 import { DEFAULT_HAND, getUnitStats, handCardInfo, resolveDeck, sampleRandomCards } from "./game/units";
-import { EMPTY_LOADOUT, ensurePlayer, getMatchLoadout, USERNAME_PATTERN } from "./players";
+import { EMPTY_LOADOUT, ensurePlayer, getMatchLoadout, getPlayerTroopLevels, USERNAME_PATTERN } from "./players";
 import { playerRouter } from "./routes/player";
 import { formatInstagramCaption, publishStatsToInstagram, renderInstagramCardSvg } from "./instagram";
 
@@ -120,9 +120,17 @@ const matchAiDifficulty = new Map<string, number>();
 const isBotControlled = (match: Match, playerId: string) => matchBots.get(match.id)?.has(playerId) ?? false;
 const isBotSeat = (playerId: string) => playerId.startsWith("bot_");
 
+function getOnlinePlayerCount(): number {
+  const uniqueUsernames = new Set<string>();
+  for (const s of io.sockets.sockets.values()) {
+    uniqueUsernames.add(typeof s.data.username === "string" ? s.data.username : s.id);
+  }
+  return uniqueUsernames.size;
+}
+
 function getLiveGameStats() {
   return {
-    onlinePlayers: io.sockets.sockets.size,
+    onlinePlayers: getOnlinePlayerCount(),
     totalTesters: Math.max(cachedTotalTesters, seenTesters.size),
     activeMatches: matches.size,
     updatedAt: new Date().toISOString(),
@@ -321,12 +329,17 @@ async function startMatch(a: Socket, b: Socket, mode: MatchMode): Promise<void> 
     return;
   }
 
+  const [troopLevelsA, troopLevelsB] = await Promise.all([
+    withTimeout(getPlayerTroopLevels(a.data.username), LOADOUT_LOOKUP_TIMEOUT_MS, {}, `troopLevels ${a.data.username}`),
+    withTimeout(getPlayerTroopLevels(b.data.username), LOADOUT_LOOKUP_TIMEOUT_MS, {}, `troopLevels ${b.data.username}`),
+  ]);
+
   const matchId = `match_${randomUUID().slice(0, 8)}`;
   const match = createMatch(
     matchId,
     mode,
-    { id: a.id, username: a.data.username, loadout: loadoutA },
-    { id: b.id, username: b.data.username, loadout: loadoutB },
+    { id: a.id, username: a.data.username, loadout: loadoutA, troopLevels: troopLevelsA },
+    { id: b.id, username: b.data.username, loadout: loadoutB, troopLevels: troopLevelsB },
   );
 
   launchMatch(match, [a, b], tournament);
@@ -581,13 +594,35 @@ function endMatch(match: Match, reason: GameOverReason, forfeitedBy?: string): v
   }
 
   if (practice) {
-    for (const p of recipients) {
-      io.to(p.id).emit("match_results", { matchId: match.id, result: resultFor(p, winner), rewards: null, rewardsSaved: true });
-    }
+    void grantPracticeTroopXp(match, recipients, winner);
     return;
   }
 
   void grantRewards(match, recipients, winner);
+}
+
+async function grantPracticeTroopXp(match: Match, recipients: PlayerState[], winner: PlayerState | undefined): Promise<void> {
+  const durationSeconds = Math.max(1, Math.round(match.tick / TICK_RATE));
+  await Promise.all(
+    recipients.map(async (p) => {
+      const playedIds = Object.keys(p.playedCardCounts);
+      let troopGains: TroopXpGain[] = [];
+      if (playedIds.length > 0) {
+        try {
+          troopGains = await grantTroopXp(p.username, playedIds, durationSeconds);
+        } catch (err) {
+          console.error(`[troopXp] failed for ${p.username}:`, errorSummary(err));
+        }
+      }
+      io.to(p.id).emit("match_results", {
+        matchId: match.id,
+        result: resultFor(p, winner),
+        rewards: null,
+        troopGains,
+        rewardsSaved: true,
+      });
+    }),
+  );
 }
 
 function resultFor(p: PlayerState, winner: PlayerState | undefined): GameResult {
@@ -600,11 +635,13 @@ function resultFor(p: PlayerState, winner: PlayerState | undefined): GameResult 
  * Emits a personalised 'match_results' to each player still connected.
  */
 async function grantRewards(match: Match, recipients: PlayerState[], winner: PlayerState | undefined): Promise<void> {
+  const durationSeconds = Math.max(1, Math.round(match.tick / TICK_RATE));
   await Promise.all(
     recipients.map(async (p) => {
       const result = resultFor(p, winner);
 
       let rewards: PlayerReward | null = null;
+      let troopGains: TroopXpGain[] = [];
       let rewardsError: string | undefined;
       if (result !== "draw") {
         const pkg = REWARD_PACKAGES[result];
@@ -620,10 +657,20 @@ async function grantRewards(match: Match, recipients: PlayerState[], winner: Pla
         }
       }
 
+      const playedIds = Object.keys(p.playedCardCounts);
+      if (playedIds.length > 0) {
+        try {
+          troopGains = await grantTroopXp(p.username, playedIds, durationSeconds);
+        } catch (err) {
+          console.error(`[troopXp] failed for ${p.username}:`, errorSummary(err));
+        }
+      }
+
       io.to(p.id).emit("match_results", {
         matchId: match.id,
         result,
         rewards,
+        troopGains,
         rewardsSaved: rewardsError === undefined,
         rewardsError,
       });
@@ -661,13 +708,20 @@ async function startBotMatch(socket: Socket, autoplay: boolean, difficulty?: num
       ? Math.round(Math.min(100, Math.max(1, difficulty)))
       : undefined;
 
+  const troopLevels = await withTimeout(
+    getPlayerTroopLevels(socket.data.username),
+    LOADOUT_LOOKUP_TIMEOUT_MS,
+    {},
+    `troopLevels ${socket.data.username}`,
+  );
+
   const matchId = `match_${randomUUID().slice(0, 8)}`;
   const botId = `bot_${randomUUID().slice(0, 8)}`;
   const botName = level !== undefined ? `AI Bot (Lv.${level})` : "AI Bot";
   const match = createMatch(
     matchId,
     "standard",
-    { id: socket.id, username: socket.data.username, loadout },
+    { id: socket.id, username: socket.data.username, loadout, troopLevels },
     { id: botId, username: botName, loadout: EMPTY_LOADOUT },
   );
 
@@ -698,7 +752,7 @@ async function startBotMatch(socket: Socket, autoplay: boolean, difficulty?: num
 
 function broadcastOnlineCount(): void {
   io.emit("online_count", {
-    count: io.sockets.sockets.size,
+    count: getOnlinePlayerCount(),
     totalTesters: Math.max(cachedTotalTesters, seenTesters.size),
   });
 }

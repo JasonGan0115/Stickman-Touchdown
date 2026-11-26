@@ -105,6 +105,19 @@ export function PostMatchScreen({ store, service, compact = false }: Props) {
         ) : (
           <Text style={styles.note}>{results.rewardsError ?? 'No rewards.'}</Text>
         )}
+        {results?.troopGains && results.troopGains.length > 0 && (
+          <View style={styles.troopGains}>
+            <Text style={styles.troopGainsTitle}>TROOP XP</Text>
+            <View style={styles.troopGainsRow}>
+              {results.troopGains.map((g) => (
+                <Text key={g.cardId} style={styles.troopGainChip}>
+                  {g.name} +{g.xpGained} XP ·{' '}
+                  {g.newLevel > g.previousLevel ? `Lv.${g.previousLevel}→${g.newLevel}` : `Lv.${g.newLevel}`}
+                </Text>
+              ))}
+            </View>
+          </View>
+        )}
       </View>
 
       <View style={styles.buttons}>
@@ -164,6 +177,20 @@ const styles = StyleSheet.create({
   augmentName: { color: '#fff', fontSize: 20, fontWeight: '800', marginTop: 2 },
   augmentMeta: { color: '#c9ccd4', fontSize: 13, marginTop: 2 },
   note: { color: '#c9ccd4', fontSize: 14, textAlign: 'center', maxWidth: 280 },
+  troopGains: { alignItems: 'center', gap: 4, marginTop: 4 },
+  troopGainsTitle: { color: '#8a8f9c', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  troopGainsRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, maxWidth: 320 },
+  troopGainChip: {
+    color: '#d9e3ff',
+    backgroundColor: '#1d2029',
+    borderColor: '#3a3d46',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 11,
+    fontWeight: '700',
+  },
   buttons: { flexDirection: 'row', gap: 12 },
   button: { backgroundColor: '#3b6cff', paddingVertical: 12, paddingHorizontal: 22, borderRadius: 14 },
   nextLevel: { backgroundColor: '#06d6a0' },

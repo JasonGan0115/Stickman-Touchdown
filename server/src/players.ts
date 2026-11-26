@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { AUGMENTS, describeAugment, getAugment } from "./game/augments";
 import { LOADOUT_AUGMENT_SLOTS, LOADOUT_UNIT_SLOTS } from "./game/constants";
 import type { Loadout } from "./game/match";
+import { getTroopLevelProgress } from "./game/troopLevels";
 import { getUnitStats, UNIT_STATS } from "./game/units";
 
 // There is no login yet: clients identify themselves by username, which the
@@ -105,13 +106,35 @@ export async function getCollection(username: string) {
 
   return {
     username: player.username,
-    cards: cards.map(({ card }) => ({
-      ...card,
-      movement: getUnitStats(card.id)?.movement ?? "walking",
-    })),
+    cards: cards.map(({ card, xp }) => {
+      const progress = getTroopLevelProgress(xp);
+      return {
+        ...card,
+        movement: getUnitStats(card.id)?.movement ?? "walking",
+        xp: progress.xp,
+        level: progress.level,
+        xpIntoLevel: progress.xpIntoLevel,
+        xpForNextLevel: progress.xpForNextLevel,
+        hoursPlayed: progress.hoursPlayed,
+      };
+    }),
     augments: mappedGrants,
     loadout,
   };
+}
+
+/** Returns a map of cardId -> troop level (1..100) for all unlocked cards of a player. */
+export async function getPlayerTroopLevels(username: string): Promise<Record<string, number>> {
+  const player = await ensurePlayer(username);
+  const cards = await prisma.playerCard.findMany({
+    where: { playerId: player.id },
+    select: { cardId: true, xp: true },
+  });
+  const levels: Record<string, number> = {};
+  for (const c of cards) {
+    levels[c.cardId] = getTroopLevelProgress(c.xp).level;
+  }
+  return levels;
 }
 
 export class LoadoutError extends Error {}

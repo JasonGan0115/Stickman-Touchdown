@@ -71,6 +71,8 @@ model PlayerAugment {
 model PlayerCard {
   playerId   String
   cardId     String
+  xp         Int      @default(0)
+  level      Int      @default(1)
   unlockedAt DateTime @default(now())
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)

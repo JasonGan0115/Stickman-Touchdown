@@ -26,6 +26,10 @@ interface CardData {
   type: string;
   manaCost: number;
   movement?: string;
+  level?: number;
+  xp?: number;
+  xpIntoLevel?: number;
+  xpForNextLevel?: number;
 }
 
 function targetLabel(c: Pick<CardData, 'type' | 'movement'>): string {
@@ -382,7 +386,7 @@ export function DeckBuilderScreen({ onClose }: { onClose?: () => void }) {
     kind: 'unit',
     key: c.id,
     title: c.name,
-    subtitle: `${c.manaCost}💧 · ${targetLabel(c)}`,
+    subtitle: `Lv.${c.level ?? 1} · ${c.manaCost}💧 · ${targetLabel(c)}`,
   });
   const augmentItem = (g: AugmentGrant): DragItem => ({
     kind: 'augment',
@@ -489,7 +493,7 @@ export function DeckBuilderScreen({ onClose }: { onClose?: () => void }) {
                 }}
                 style={styles.unitSlot}
                 title={card?.name}
-                subtitle={card ? `${card.manaCost} mana` : undefined}
+                subtitle={card ? `Lv.${card.level ?? 1} · ${card.manaCost} mana` : undefined}
                 onClear={() => setUnitSlots((s) => s.map((v, j) => (j === i ? null : v)))}
               />
             );

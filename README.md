@@ -12,6 +12,7 @@ A fast-paced, real-time 1v1 tactical football/PvP web & mobile game. Summon stic
 - **Sticky Liquid & Cooldown**: Start with **3 Sticky Liquid** (regenerates **1/sec**, max **10**) with a **2-second global summon cooldown** between troop deployments.
 - **8-Troop Deck & Card Cycling**: Build an 8-troop deck; **4 cards** are active in hand with a **NEXT** preview, and played cards cycle to the back of the queue.
 - **64 Unique Sticky Troops**: Across **4 movement classes** (*Walking, Running, Sliding, Flying*) and **4 combat roles** (*Melee, Ranged, Tank, Caster*). Ground melee/tanks cannot hit flying units.
+- **Per-Troop Leveling (Lv. 1–100)**: Playing a troop in matches earns **1 XP/sec** up to **Level 100** (364,320 XP / ~101.2 hours), granting **+0.2% HP & damage per level** (up to **+19.8%** at Lv. 100).
 - **Scouting & 100 Augments**: Preview 4 random opponent troops pre-match, draft a **Silver** augment at kickoff, and unlock **Gold / Legendary** comeback augments when conceding a touchdown (augments expire 24 hours after acquisition).
 - **Modes**: 1v1 Ranked Gridiron, 100-level VS AI Challenge, and Weekly Mirror Tournament.
 

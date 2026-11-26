@@ -3,6 +3,19 @@ import { prisma } from "../db";
 import { ensurePlayer } from "../players";
 import { describeAugment } from "./augments";
 import { AUGMENT_DURATION_MS, LOSER_XP, WINNER_XP } from "./constants";
+import { getTroopLevelFromXp, getTroopLevelProgress, TROOP_XP_PER_SECOND } from "./troopLevels";
+import { getUnitStats } from "./units";
+
+export interface TroopXpGain {
+  cardId: string;
+  name: string;
+  xpGained: number;
+  totalXp: number;
+  previousLevel: number;
+  newLevel: number;
+  xpIntoLevel: number;
+  xpForNextLevel: number;
+}
 
 export interface AugmentReward {
   name: string;
@@ -63,5 +76,57 @@ export async function grantMatchReward(username: string, xp: number, rarity: Rar
         expiresAt: grant.expiresAt.toISOString(),
       },
     };
+  });
+}
+
+/**
+ * Awards per-troop XP to each distinct troop spawned by `username` during a match,
+ * proportional to match play time (1 XP per second). Updates `PlayerCard.xp` and `level`.
+ */
+export async function grantTroopXp(
+  username: string,
+  playedCardIds: string[],
+  durationSeconds: number,
+): Promise<TroopXpGain[]> {
+  const uniqueIds = [...new Set(playedCardIds)].filter((id) => !!getUnitStats(id));
+  if (uniqueIds.length === 0) return [];
+
+  const xpGained = Math.max(1, Math.round(durationSeconds)) * TROOP_XP_PER_SECOND;
+  const { id: playerId } = await ensurePlayer(username);
+
+  return prisma.$transaction(async (tx) => {
+    const gains: TroopXpGain[] = [];
+    for (const cardId of uniqueIds) {
+      const existing = await tx.playerCard.findUnique({
+        where: { playerId_cardId: { playerId, cardId } },
+        select: { xp: true, level: true },
+      });
+      if (!existing) continue;
+
+      const previousLevel = getTroopLevelFromXp(existing.xp);
+      const updated = await tx.playerCard.update({
+        where: { playerId_cardId: { playerId, cardId } },
+        data: { xp: { increment: xpGained } },
+        select: { xp: true },
+      });
+      const progress = getTroopLevelProgress(updated.xp);
+      if (progress.level !== existing.level) {
+        await tx.playerCard.update({
+          where: { playerId_cardId: { playerId, cardId } },
+          data: { level: progress.level },
+        });
+      }
+      gains.push({
+        cardId,
+        name: getUnitStats(cardId)?.name ?? cardId,
+        xpGained,
+        totalXp: progress.xp,
+        previousLevel,
+        newLevel: progress.level,
+        xpIntoLevel: progress.xpIntoLevel,
+        xpForNextLevel: progress.xpForNextLevel,
+      });
+    }
+    return gains;
   });
 }

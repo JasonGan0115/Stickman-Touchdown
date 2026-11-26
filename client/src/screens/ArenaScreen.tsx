@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Pressable, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -75,6 +75,29 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
   const boardWidth = FIELD_WIDTH * scale;
   const boardHeight = FIELD_HEIGHT * scale;
 
+  // Snappy camera shake when a touchdown is scored
+  const touchdownBanner = useStore(store, (s) => s.touchdownBanner);
+  const [shakeX] = useState(() => new Animated.Value(0));
+  const [shakeY] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    if (!touchdownBanner) return;
+    const step = (x: number, y: number, duration = 42) =>
+      Animated.parallel([
+        Animated.timing(shakeX, { toValue: x, duration, useNativeDriver: true }),
+        Animated.timing(shakeY, { toValue: y, duration, useNativeDriver: true }),
+      ]);
+    Animated.sequence([
+      step(8, -5),
+      step(-8, 5),
+      step(6, 4),
+      step(-6, -4),
+      step(3, -2),
+      step(-3, 2),
+      step(0, 0, 50),
+    ]).start();
+  }, [touchdownBanner, shakeX, shakeY]);
+
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     setArea({ width, height });
@@ -137,7 +160,8 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
       <DraftModal store={store} service={service} />
       <View style={styles.area} onLayout={onLayout}>
         {scale > 0 && (
-          <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn} onPress={() => {}}>
+          <Animated.View style={{ transform: [{ translateX: shakeX }, { translateY: shakeY }] }}>
+            <Pressable style={{ width: boardWidth, height: boardHeight }} onPressIn={onPressIn} onPress={() => {}}>
             {/* The game board, in world coordinates, rotated for Player 2 */}
             <View style={[styles.board, flipped && styles.rotated]}>
               <FieldStripes flipped={flipped} />
@@ -175,7 +199,8 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
                 <Text style={styles.debugBadgeText}>DEBUG: VIEW FLIPPED</Text>
               </View>
             )}
-          </Pressable>
+            </Pressable>
+          </Animated.View>
         )}
       </View>
       <CardHand store={store} compact={compact} />
@@ -277,6 +302,26 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
   const secondsLeftMs = useStore(store, (s) => Math.ceil(s.matchTimer / 1000) * 1000);
   const myScore = useStore(store, (s) => s.score.you);
   const enemyScore = useStore(store, (s) => s.score.opponent);
+  const [myScoreScale] = useState(() => new Animated.Value(1));
+  const [enemyScoreScale] = useState(() => new Animated.Value(1));
+  const prevMyScore = useRef(myScore);
+  const prevEnemyScore = useRef(enemyScore);
+
+  useEffect(() => {
+    if (myScore > prevMyScore.current) {
+      myScoreScale.setValue(1.55);
+      Animated.spring(myScoreScale, { toValue: 1, friction: 4, tension: 140, useNativeDriver: true }).start();
+    }
+    prevMyScore.current = myScore;
+  }, [myScore, myScoreScale]);
+
+  useEffect(() => {
+    if (enemyScore > prevEnemyScore.current) {
+      enemyScoreScale.setValue(1.55);
+      Animated.spring(enemyScoreScale, { toValue: 1, friction: 4, tension: 140, useNativeDriver: true }).start();
+    }
+    prevEnemyScore.current = enemyScore;
+  }, [enemyScore, enemyScoreScale]);
   const opponentName = useStore(store, (s) => selectOpponent(s)?.username ?? 'ENEMY');
   const tournamentName = useStore(store, (s) => (s.mode === 'tournament' ? (s.tournament?.name ?? 'Weekly Tournament') : null));
   const aiLabel = useStore(store, (s) => {
@@ -290,11 +335,13 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
       <View style={styles.hudPill}>
         <Text style={[styles.timer, compact && styles.timerCompact]}>{formatTime(secondsLeftMs)}</Text>
         <View style={styles.scoreRow}>
-          <Text style={[styles.score, { color: COLORS.homeEndzone }]}>YOU {myScore}</Text>
+          <Animated.Text style={[styles.score, { color: COLORS.homeEndzone, transform: [{ scale: myScoreScale }] }]}>
+            YOU {myScore}
+          </Animated.Text>
           <Text style={styles.scoreDash}>–</Text>
-          <Text style={[styles.score, { color: COLORS.enemyEndzone }]}>
+          <Animated.Text style={[styles.score, { color: COLORS.enemyEndzone, transform: [{ scale: enemyScoreScale }] }]}>
             {enemyScore} {opponentName}
-          </Text>
+          </Animated.Text>
         </View>
       </View>
       {aiLabel && (
@@ -312,25 +359,131 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
   );
 }
 
+const CONFETTI_PARTICLES = Array.from({ length: 22 }, (_, i) => {
+  const spread = ((i / 21) - 0.5) * 2; // -1..1 across the field width
+  const speed = 0.65 + (i % 5) * 0.14;
+  return {
+    id: i,
+    startXFrac: 0.12 + (i / 21) * 0.76,
+    dx: spread * 95 + ((i % 3) - 1) * 18,
+    dy: (130 + (i % 4) * 45) * speed,
+    rotateDeg: ((i % 2 === 0 ? 1 : -1) * (180 + (i % 5) * 70)) + 'deg',
+    size: 7 + (i % 4) * 2,
+    colorIndex: i % 4,
+  };
+});
+
 function TouchdownBannerOverlay({ store }: { store: GameStore }) {
   const visible = useStore(store, (s) => s.touchdownBanner);
+  const lastTouchdownBy = useStore(store, (s) => s.lastTouchdownBy);
+  const isEnemyScore = lastTouchdownBy === 'opponent';
+
+  const [flashOpacity] = useState(() => new Animated.Value(0));
+  const [endzonePulse] = useState(() => new Animated.Value(0));
+  const [bannerScale] = useState(() => new Animated.Value(2.2));
+  const [bannerOpacity] = useState(() => new Animated.Value(0));
+  const [confettiProgress] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     if (!visible) return;
     soundService.playTouchdown();
+
+    flashOpacity.setValue(0.75);
+    endzonePulse.setValue(0.9);
+    bannerScale.setValue(2.2);
+    bannerOpacity.setValue(0);
+    confettiProgress.setValue(0);
+
+    Animated.parallel([
+      Animated.timing(flashOpacity, { toValue: 0, duration: 280, useNativeDriver: true }),
+      Animated.timing(endzonePulse, { toValue: 0, duration: 950, useNativeDriver: true }),
+      Animated.spring(bannerScale, { toValue: 1, friction: 5, tension: 150, useNativeDriver: true }),
+      Animated.sequence([
+        Animated.timing(bannerOpacity, { toValue: 1, duration: 110, useNativeDriver: true }),
+        Animated.delay(1550),
+        Animated.timing(bannerOpacity, { toValue: 0, duration: 280, useNativeDriver: true }),
+      ]),
+      Animated.timing(confettiProgress, { toValue: 1, duration: 1250, useNativeDriver: true }),
+    ]).start();
+
     const t = setTimeout(() => {
       store.setState({ touchdownBanner: false });
     }, 2000);
     return () => clearTimeout(t);
-  }, [visible, store]);
+  }, [visible, store, flashOpacity, endzonePulse, bannerScale, bannerOpacity, confettiProgress]);
 
   if (!visible) return null;
+
+  const palette = isEnemyScore
+    ? ['#ff4d4f', '#ff9a9a', '#ffb020', '#ffffff']
+    : ['#38bdf8', '#ffb020', '#06d6a0', '#ffffff'];
+
   return (
     <View style={styles.touchdownOverlay}>
-      <View style={styles.touchdownBanner}>
-        <Text style={styles.touchdownTitle}>🏈 TOUCHDOWN! 🏈</Text>
-        <Text style={styles.touchdownSubtitle}>POINT SCORED · ROUND RESET WITH 5 LIQUID</Text>
-      </View>
+      {/* Endzone glow pulse on the scored endzone */}
+      <Animated.View
+        style={[
+          styles.touchdownEndzonePulse,
+          isEnemyScore ? { bottom: 0 } : { top: 0 },
+          {
+            height: ENDZONE_PCT,
+            backgroundColor: isEnemyScore ? '#ff4d4f' : '#ffb020',
+            opacity: endzonePulse,
+          },
+        ]}
+      />
+
+      {/* Confetti / spark burst radiating from the scored endzone */}
+      {CONFETTI_PARTICLES.map((p) => {
+        const translateX = confettiProgress.interpolate({ inputRange: [0, 1], outputRange: [0, p.dx] });
+        const translateY = confettiProgress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, isEnemyScore ? -p.dy : p.dy],
+        });
+        const rotate = confettiProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', p.rotateDeg] });
+        const opacity = confettiProgress.interpolate({ inputRange: [0, 0.75, 1], outputRange: [1, 0.9, 0] });
+        return (
+          <Animated.View
+            key={p.id}
+            style={[
+              styles.confettiPiece,
+              isEnemyScore ? { bottom: '9%' } : { top: '9%' },
+              {
+                left: `${p.startXFrac * 100}%`,
+                width: p.size,
+                height: p.size * 0.6,
+                backgroundColor: palette[p.colorIndex],
+                opacity,
+                transform: [{ translateX }, { translateY }, { rotate }],
+              },
+            ]}
+          />
+        );
+      })}
+
+      {/* Impact flash */}
+      <Animated.View
+        style={[
+          styles.touchdownFlash,
+          { backgroundColor: isEnemyScore ? '#ff4d4f' : '#fff7cc', opacity: flashOpacity },
+        ]}
+      />
+
+      {/* Spring-slam team-colored banner */}
+      <Animated.View
+        style={[
+          styles.touchdownBanner,
+          isEnemyScore ? styles.touchdownBannerEnemy : styles.touchdownBannerYou,
+          { opacity: bannerOpacity, transform: [{ scale: bannerScale }] },
+        ]}
+      >
+        <Text style={[styles.touchdownTitle, isEnemyScore && styles.touchdownTitleEnemy]}>
+          {isEnemyScore ? '🚨 ENEMY TOUCHDOWN! 🚨' : '🏈 TOUCHDOWN! +1 🏈'}
+        </Text>
+        <Text style={[styles.touchdownSubtitle, isEnemyScore && styles.touchdownSubtitleEnemy]}>
+          {isEnemyScore ? 'COMEBACK AUGMENT INCOMING · 5 LIQUID RESET' : 'POINT SCORED · ROUND RESET WITH 5 LIQUID'}
+        </Text>
+      </Animated.View>
     </View>
   );
 }
@@ -574,24 +727,49 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    overflow: 'hidden',
     pointerEvents: 'none',
   },
+  touchdownFlash: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  touchdownEndzonePulse: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+  },
+  confettiPiece: {
+    position: 'absolute',
+    borderRadius: 2,
+  },
   touchdownBanner: {
-    backgroundColor: '#ffb020',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    borderRadius: 16,
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#fff',
     shadowColor: '#000',
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOpacity: 0.55,
+    shadowRadius: 14,
+    elevation: 10,
   },
-  touchdownTitle: { color: '#1a1200', fontSize: 24, fontWeight: '900', letterSpacing: 2 },
-  touchdownSubtitle: { color: '#2d2004', fontSize: 11, fontWeight: '800', marginTop: 4, letterSpacing: 1 },
+  touchdownBannerYou: {
+    backgroundColor: '#ffb020',
+    borderColor: '#38bdf8',
+  },
+  touchdownBannerEnemy: {
+    backgroundColor: '#b91c1c',
+    borderColor: '#ff9a9a',
+  },
+  touchdownTitle: { color: '#1a1200', fontSize: 23, fontWeight: '900', letterSpacing: 1.5, textAlign: 'center' },
+  touchdownTitleEnemy: { color: '#ffffff' },
+  touchdownSubtitle: { color: '#2d2004', fontSize: 11, fontWeight: '800', marginTop: 4, letterSpacing: 0.8, textAlign: 'center' },
+  touchdownSubtitleEnemy: { color: '#ffe4e6' },
 
   toastWrap: { position: 'absolute', top: '55%', left: 0, right: 0, alignItems: 'center', pointerEvents: 'none' },
   toast: {
