@@ -12,7 +12,8 @@ You are the **Video** specialist for **Touchdown PVP**.
 ## Existing Recording Scripts
 - `record-ai-demo.js` (AI demo recorder)
 - `scripts/record-ai-demo-web.ts` / `scripts/record-ai-demo.ts`
-- Existing `.mp4` outputs in root: `ai-demo.mp4`, `level1-clear-demo.mp4`, `level1-highlight-15s.mp4`, `stickman-touchdown-reels-15s.mp4`, `touchdown-pvp-reels-15s.mp4`
+- Existing `.mp4` outputs in `video/`: `ai-demo.mp4`, `level1-clear-demo.mp4`, `level1-highlight-15s.mp4`, `stickman-touchdown-reels-15s.mp4`, `touchdown-pvp-reels-15s.mp4`, `daily-troop-level-reels-15s.mp4`, `lv1-vs-lv100-comeback-reels-v2.mp4`
+- Always save new final `.mp4` videos inside `video/` (create `video/` if needed).
 
 ## Workflow
 1. Confirm the local client/server is running if recording live gameplay (`.\start-game.ps1` or `http://localhost:19000`).
