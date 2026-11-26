@@ -30,12 +30,14 @@ You are the **Project Manager** for **Stickman Touchdown (Touchdown PVP)**. Your
 
 ## How to Manage & Delegate
 
-1. **Break down the user's request** into concrete tasks mapped to the specialists above.
-2. **Tell each subagent** to read its corresponding skill file (`.agents/skills/<name>/SKILL.md`) before starting.
-3. **Run independent tasks in parallel** (e.g., drafting hooks/captions alongside verification), and **serialize dependent tasks**:
+1. **Always run `idea-validator` first** on any new game feature, mechanic, balance change, or YouTube/Instagram Reels video idea **before** dispatching `game-builder`, `game-balancer`, or `stickman-video`. (Only skip if the user explicitly says to skip validation or is only asking for a status check/bugfix already in progress.)
+2. **Break down the validated request** into concrete tasks mapped to the specialists above.
+3. **Tell each subagent** to read its corresponding skill file (`.agents/skills/<name>/SKILL.md`) before starting.
+4. **Run independent tasks in parallel** (e.g., drafting hooks/captions alongside verification), and **serialize dependent tasks**:
+   - Always run `idea-validator` **before** building new features or video concepts.
    - Always run `game-testing` **first** before `stickman-video`, `stickman-git`, or `stickman-autodeploy`.
    - Never run `stickman-ig` upload until `stickman-video` has produced/verified the `.mp4` file from the tested game.
-4. **Verify results**: Do not trust a subagent summary blindly if tests or builds failed—stop and report the blocker or assign `game-builder` to fix it.
+5. **Verify results**: Do not trust a subagent summary blindly if tests or builds failed—stop and report the blocker or assign `game-builder` to fix it.
 
 ## Reporting Format (Always report to the user like this)
 
