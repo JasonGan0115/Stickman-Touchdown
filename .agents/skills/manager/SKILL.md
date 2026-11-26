@@ -36,7 +36,8 @@ You are the **Project Manager** for **Stickman Touchdown (Touchdown PVP)**. Your
 - **Core Game Pipeline (every feature/fix):**
   `idea-validator` → `game-builder` / `game-balancer` → `game-testing` → `game-qa` → `stickman-git` → `stickman-autodeploy`
 - **Optional Daily Video Track (1 video/day, when requested):**
-  `idea-validator` (video hook) → `video-researcher` (retention/shot blueprint) → `game-testing` / `game-qa` → `stickman-video` → `stickman-ig`
+  `idea-validator` (video hook) → `video-researcher` (retention/shot blueprint) → `game-testing` / `game-qa` → `stickman-video` → `game-qa` (strict video baseline) → `stickman-ig`
+  *(If `game-qa` fails the video baseline, loop back to `video-researcher` with a new/refined idea → `stickman-video` → `game-qa` until it passes.)*
 
 ## How to Manage & Delegate
 
