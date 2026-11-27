@@ -22,8 +22,9 @@ const REASON_TEXT: Record<GameOverInfo['reason'], string> = {
 
 const RARITY_COLOR: Record<AugmentReward['rarity'], string> = {
   Common: '#b8bec9',
-  Rare: '#4da3ff',
-  Legendary: '#ffb020',
+  Rare: '#ffc107',
+  Epic: '#a855f7',
+  Legendary: '#ff6b35',
 };
 
 function hoursUntil(iso: string): number {

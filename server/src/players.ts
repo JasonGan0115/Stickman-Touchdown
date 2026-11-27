@@ -11,10 +11,8 @@ export const USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
 
 export const EMPTY_LOADOUT: Loadout = { unitIds: [], augmentIds: [] };
 
-// TODO(deploy): In production (NODE_ENV === "production"), players only receive
-// starter/earned cards and augments. In dev/testing, all 64 troops and all
-// augments are unlocked automatically.
-const TESTING_UNLOCK_ALL = process.env.NODE_ENV !== "production";
+// TODO(futurista): restore 24h vault & unlock gating post-deploy
+const TESTING_UNLOCK_ALL = true;
 
 /**
  * Finds the player, creating them if this username is new. New players are

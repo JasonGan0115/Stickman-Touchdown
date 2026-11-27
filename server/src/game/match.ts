@@ -74,7 +74,7 @@ export interface PlayerState {
   loadout: Loadout;
   hand: string[]; // active 4 cards currently in hand
   drawQueue: string[]; // remaining cards in deck awaiting cycle
-  spawnCooldownTicks: number; // placement cooldown (2s)
+  spawnCooldownTicks: number; // placement cooldown (1s)
   modifiers: Modifiers; // combined augment boosts, applied to every unit this player spawns
   troopLevels: Record<string, number>; // cardId -> troop level (1..100)
   playedCardCounts: Record<string, number>; // cardId -> spawn count during this match
@@ -511,7 +511,7 @@ export function stepMatch(match: Match): TickEvents {
       events.roundReset = true;
       for (const p of match.players) {
         p.mana = RESET_MANA_ON_SCORE;
-        p.spawnCooldownTicks = 0;
+        p.spawnCooldownTicks = SPAWN_COOLDOWN_TICKS;
       }
     }
   }

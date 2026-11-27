@@ -149,9 +149,9 @@ function AppContent() {
                   setActiveTab('tournament');
                 }}
               >
-                <Text style={styles.tabIcon}>🏆</Text>
+                <Text style={styles.tabIcon}>⏳</Text>
                 <Text style={[styles.tabLabel, activeTab === 'tournament' && styles.tabLabelActive]}>
-                  Tournament
+                  Coming Soon
                 </Text>
               </Pressable>
             </View>

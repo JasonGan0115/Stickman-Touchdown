@@ -133,8 +133,7 @@ const matchAiDifficulty = new Map<string, number>();
 interface MatchDraftState {
   kickoffEndsAt: number;
   kickoffPending: Map<string, string>; // playerId -> fallback silver augmentId
-  comebackPlayerId: string | null;
-  comebackDefaultAugmentId: string | null;
+  roundDraftPending: Map<string, string>; // playerId -> fallback augmentId for between-round draft
   comebackPausedAt: number;
   comebackTimeoutAt: number;
 }
@@ -380,8 +379,7 @@ function launchMatch(match: Match, sockets: Socket[], tournament?: WeeklyTournam
   const draftState: MatchDraftState = {
     kickoffEndsAt,
     kickoffPending: new Map(),
-    comebackPlayerId: null,
-    comebackDefaultAugmentId: null,
+    roundDraftPending: new Map(),
     comebackPausedAt: 0,
     comebackTimeoutAt: 0,
   };
@@ -497,20 +495,21 @@ function gameTick(match: Match): void {
     }
   }
 
-  // Mid-round comeback draft pause after conceding a touchdown
+  // Mid-round augment draft pause after a touchdown round reset
   if (match.phase === "comeback_draft" && draft) {
     if (now >= draft.comebackTimeoutAt) {
-      const player = draft.comebackPlayerId ? getPlayer(match, draft.comebackPlayerId) : undefined;
-      if (player && draft.comebackDefaultAugmentId) {
-        applyAugment(player, draft.comebackDefaultAugmentId);
-        io.to(player.id).emit("draft_confirmed", {
-          augmentId: draft.comebackDefaultAugmentId,
-          boosts: describeModifiers(player.modifiers),
-        });
+      for (const [playerId, defaultAugId] of draft.roundDraftPending) {
+        const player = getPlayer(match, playerId);
+        if (player) {
+          applyAugment(player, defaultAugId);
+          io.to(player.id).emit("draft_confirmed", {
+            augmentId: defaultAugId,
+            boosts: describeModifiers(player.modifiers),
+          });
+        }
       }
+      draft.roundDraftPending.clear();
       match.endsAt += now - draft.comebackPausedAt;
-      draft.comebackPlayerId = null;
-      draft.comebackDefaultAugmentId = null;
       match.phase = "playing";
     } else {
       const frozenRemainingMs = Math.max(0, match.endsAt - draft.comebackPausedAt);
@@ -540,30 +539,45 @@ function gameTick(match: Match): void {
   const events = stepMatch(match);
   logTickEvents(match, events);
 
-  // If a touchdown occurred, trigger comeback draft strictly for the conceding player
+  // If a touchdown occurred, trigger between-round draft:
+  // Winner gets Gold (escalating to Legendary at round >= 4), Loser gets Epic (escalating to Legendary at round >= 3)
   if (events.roundReset && events.scored.length > 0 && !getScoreLimitWinner(match)) {
     const scorer = events.scored[0].scorer;
-    const conceding = getOpponent(match, scorer.id);
-    if (conceding) {
-      const comebackOptions = getDraftOptions("gold_or_legendary", 3);
-      debugLog(match.id, `Touchdown comeback draft offered to P${conceding.number} ${conceding.username}`);
-      const socket = io.sockets.sockets.get(conceding.id);
-      if (socket && comebackOptions.length > 0) {
+    const [p1, p2] = match.players;
+    const roundNumber = p1.score + p2.score;
+
+    for (const p of match.players) {
+      const isWinner = p.id === scorer.id;
+      const role: "winner" | "loser" = isWinner ? "winner" : "loser";
+      const tier = isWinner
+        ? (roundNumber >= 4 ? "legendary" : "gold")
+        : (roundNumber >= 3 ? "legendary" : "epic");
+      const tierLabel = tier === "gold" ? "GOLD" : tier === "epic" ? "EPIC" : "LEGENDARY";
+      const options = getDraftOptions(tier, 3);
+      if (options.length === 0) continue;
+
+      const socket = io.sockets.sockets.get(p.id);
+      if (socket && !isBotControlled(match, p.id)) {
         if (draft) {
-          match.phase = "comeback_draft";
-          draft.comebackPlayerId = conceding.id;
-          draft.comebackDefaultAugmentId = comebackOptions[0].id;
-          draft.comebackPausedAt = now;
-          draft.comebackTimeoutAt = now + COMEBACK_DRAFT_TIMEOUT_MS;
+          draft.roundDraftPending.set(p.id, options[0].id);
         }
         socket.emit("comeback_draft", {
-          options: comebackOptions,
-          reason: "conceded_touchdown",
+          options,
+          reason: isWinner ? "round_won" : "conceded_touchdown",
+          role,
+          tierLabel,
         });
-      } else if (isBotControlled(match, conceding.id) && comebackOptions.length > 0) {
-        applyAugment(conceding, comebackOptions[0].id);
-        debugLog(match.id, `Bot P${conceding.number} auto-picked comeback augment ${comebackOptions[0].name}`);
+        debugLog(match.id, `Round ${roundNumber} ${role} draft (${tierLabel}) offered to P${p.number} ${p.username}`);
+      } else if (isBotControlled(match, p.id)) {
+        applyAugment(p, options[0].id);
+        debugLog(match.id, `Bot P${p.number} auto-picked ${tierLabel} augment ${options[0].name}`);
       }
+    }
+
+    if (draft && draft.roundDraftPending.size > 0) {
+      match.phase = "comeback_draft";
+      draft.comebackPausedAt = now;
+      draft.comebackTimeoutAt = now + COMEBACK_DRAFT_TIMEOUT_MS;
     }
   }
 
@@ -987,21 +1001,22 @@ io.on("connection", (socket) => {
     const player = match ? getPlayer(match, socket.id) : undefined;
     const draft = match ? matchDrafts.get(match.id) : undefined;
     if (!match || match.ended || !player || typeof augmentId !== "string") return;
-    if (match.phase !== "comeback_draft" || !draft || draft.comebackPlayerId !== player.id) return;
+    if (match.phase !== "comeback_draft" || !draft || !draft.roundDraftPending.has(player.id)) return;
 
     applyAugment(player, augmentId);
-    match.endsAt += Date.now() - draft.comebackPausedAt;
-    draft.comebackPlayerId = null;
-    draft.comebackDefaultAugmentId = null;
-    match.phase = "playing";
-    match.nextTickAt = Date.now();
-
+    draft.roundDraftPending.delete(player.id);
     socket.emit("draft_confirmed", {
       augmentId,
       boosts: describeModifiers(player.modifiers),
     });
-    broadcastState(match, Math.max(0, match.endsAt - Date.now()));
-    debugLog("draft", `P${player.number} ${player.username} picked Comeback augment ${augmentId}`);
+    debugLog("draft", `P${player.number} ${player.username} picked Round augment ${augmentId}`);
+
+    if (draft.roundDraftPending.size === 0) {
+      match.endsAt += Date.now() - draft.comebackPausedAt;
+      match.phase = "playing";
+      match.nextTickAt = Date.now();
+      broadcastState(match, Math.max(0, match.endsAt - Date.now()));
+    }
   });
 
   // TEMPORARY debug hook: ends the sender's match as a Player 1 win, with real rewards.

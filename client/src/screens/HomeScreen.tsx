@@ -48,11 +48,6 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
     AsyncStorage.setItem(AI_LEVEL_STORAGE_KEY, String(clamped)).catch(() => {});
   };
 
-  const handleRankedQueue = () => {
-    soundService.playWhistle();
-    service.joinQueue('standard');
-  };
-
   const handleAiPractice = () => {
     soundService.playWhistle();
     service.playVsAi(false, aiLevel);
@@ -63,9 +58,11 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
     service.playVsAi(true, aiLevel);
   };
 
+  const clearedPct = Math.min(100, Math.round((clearedLevels.length / 100) * 100));
+
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
-      {/* Player Header */}
+      {/* Compact Brand & Status Header */}
       <View style={styles.header}>
         <Text style={styles.logo}>🏈 TOUCHDOWN PVP</Text>
         <View style={styles.headerBadges}>
@@ -75,8 +72,8 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
               {isConnected
                 ? username ?? 'Player'
                 : reconnectInSec !== null && reconnectInSec > 0
-                  ? `Connecting to Server… (${reconnectInSec}s)`
-                  : 'Connecting to Server…'}
+                  ? `Connecting… (${reconnectInSec}s)`
+                  : 'Connecting…'}
             </Text>
           </View>
           {isConnected && onlineCount !== null && (
@@ -92,84 +89,40 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
         </View>
       </View>
 
-      {/* Deck Status Pill */}
-      <Pressable
-        style={({ pressed }) => [styles.deckStatusCard, pressed && styles.dimmed]}
-        onPress={() => onSelectTab('deck')}
-      >
-        <View style={styles.deckStatusLeft}>
-          <Text style={styles.deckStatusIcon}>🃏</Text>
-          <View>
-            <Text style={styles.deckStatusTitle}>Active Loadout: 8 / 8 Troops</Text>
-            <Text style={styles.deckStatusSub}>Deck configured · Clash-style card cycling active</Text>
+      {/* Hero Card: VS AI Challenge (Levels 1-100) */}
+      <View style={styles.heroCard}>
+        <View style={styles.heroTopRow}>
+          <View style={styles.heroTitleWrap}>
+            <Text style={styles.heroEyebrow}>SINGLE-PLAYER CAMPAIGN</Text>
+            <Text style={styles.heroTitle}>🤖 VS AI CHALLENGE</Text>
           </View>
-        </View>
-        <Text style={styles.editDeckButtonText}>Edit ›</Text>
-      </Pressable>
-
-      {/* Ranked Mode Featured Card */}
-      <View style={styles.modeCard}>
-        <View style={styles.modeCardHeader}>
-          <Text style={styles.modeIcon}>⚡</Text>
-          <View style={styles.modeHeaderText}>
-            <Text style={styles.modeTitle}>1v1 RANKED GRIDIRON</Text>
-            <Text style={styles.modeSub}>First to 3 Touchdowns · Real-time PvP</Text>
+          <View style={styles.clearedPill}>
+            <Text style={styles.clearedPillText}>{clearedLevels.length}/100</Text>
           </View>
         </View>
 
+        {/* Progress Bar */}
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${clearedPct}%` }]} />
+        </View>
+
+        {/* Match Rules Strip */}
         <View style={styles.modeSpecsRow}>
           <View style={styles.specItem}>
             <Text style={styles.specLabel}>LIQUID</Text>
-            <Text style={styles.specValue}>3 Start · +1/s</Text>
+            <Text style={styles.specValue}>3 Start · 0.5/s</Text>
           </View>
           <View style={styles.specItem}>
             <Text style={styles.specLabel}>COOLDOWN</Text>
             <Text style={styles.specValue}>1.0s Global</Text>
           </View>
           <View style={styles.specItem}>
-            <Text style={styles.specLabel}>AUGMENT</Text>
-            <Text style={styles.specValue}>Silver Draft</Text>
+            <Text style={styles.specLabel}>DRAFTS</Text>
+            <Text style={styles.specValue}>Silver → Gold/Epic</Text>
           </View>
         </View>
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.playButton,
-            (!isConnected || pressed) && styles.dimmed,
-          ]}
-          disabled={!isConnected}
-          onPress={handleRankedQueue}
-        >
-          <Text style={styles.playButtonText}>
-            {isConnected ? 'FIND RANKED MATCH' : 'CONNECTING…'}
-          </Text>
-        </Pressable>
-      </View>
-
-      {/* Weekly Tournament Spotlight */}
-      <Pressable
-        style={({ pressed }) => [styles.tournamentBanner, pressed && styles.dimmed]}
-        onPress={() => onSelectTab('tournament')}
-      >
-        <View style={styles.tournamentBannerTop}>
-          <Text style={styles.tournamentTrophyIcon}>🏆</Text>
-          <View style={styles.tournamentBannerText}>
-            <Text style={styles.tournamentBannerTitle}>WEEKLY TOURNAMENT</Text>
-            <Text style={styles.tournamentBannerSub}>Mirror match bracket · Equal decks & mana</Text>
-          </View>
-        </View>
-        <View style={styles.tournamentActionRow}>
-          <Text style={styles.tournamentRewardText}>+100 XP & Vault Augment</Text>
-          <Text style={styles.tournamentEnterLink}>View Bracket & Enter ›</Text>
-        </View>
-      </Pressable>
-
-      {/* AI Practice Section */}
-      <View style={styles.practiceSection}>
-        <View style={styles.practiceHeaderRow}>
-          <Text style={styles.sectionHeader}>🤖 VS AI CHALLENGE (100 LEVELS)</Text>
-          <Text style={styles.clearedCountText}>Cleared: {clearedLevels.length}/100</Text>
-        </View>
+        {/* Level Selector */}
         <View style={styles.levelCard}>
           <View style={styles.levelStepper}>
             <Pressable
@@ -187,12 +140,10 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
               <Text style={styles.levelStepText}>-1</Text>
             </Pressable>
             <View style={styles.levelDisplay}>
-              <Text style={styles.levelValue}>Lv. {aiLevel} / 100</Text>
+              <Text style={styles.levelValue}>Lv. {aiLevel}</Text>
               <View style={styles.levelMetaRow}>
                 <Text style={styles.levelTier}>{aiTierLabel(aiLevel)}</Text>
-                {clearedLevels.includes(aiLevel) && (
-                  <Text style={styles.levelClearedBadge}>✓ CLEARED</Text>
-                )}
+                {clearedLevels.includes(aiLevel) && <Text style={styles.levelClearedBadge}>✓ CLEARED</Text>}
               </View>
             </View>
             <Pressable
@@ -211,50 +162,55 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
             </Pressable>
           </View>
         </View>
-        <View style={styles.aiButtonsRow}>
+
+        {/* Primary Play CTA */}
+        <Pressable
+          style={({ pressed }) => [styles.playButton, (!isConnected || pressed) && styles.dimmed]}
+          disabled={!isConnected}
+          onPress={handleAiPractice}
+        >
+          <Text style={styles.playButtonText}>
+            {isConnected ? `PLAY VS AI · LV. ${aiLevel}` : 'CONNECTING TO SERVER…'}
+          </Text>
+        </Pressable>
+
+        {__DEV__ && (
           <Pressable
-            style={({ pressed }) => [styles.aiButton, pressed && styles.dimmed]}
+            style={({ pressed }) => [styles.aiSpectateButton, (!isConnected || pressed) && styles.dimmed]}
             disabled={!isConnected}
-            onPress={handleAiPractice}
+            onPress={handleAiSpectate}
           >
-            <Text style={styles.aiButtonIcon}>🎮</Text>
-            <Text style={styles.aiButtonText}>Play vs AI · Lv.{aiLevel}</Text>
+            <Text style={styles.aiSpectateText}>👁️ Watch AI vs AI (Lv.{aiLevel})</Text>
           </Pressable>
+        )}
+      </View>
 
-          {__DEV__ && (
-            <Pressable
-              style={({ pressed }) => [styles.aiButton, styles.aiSpectateButton, pressed && styles.dimmed]}
-              disabled={!isConnected}
-              onPress={handleAiSpectate}
-            >
-              <Text style={styles.aiButtonIcon}>👁️</Text>
-              <Text style={styles.aiButtonText}>Watch AI vs AI</Text>
-            </Pressable>
-          )}
+      {/* Active Loadout Summary Card */}
+      <Pressable
+        style={({ pressed }) => [styles.deckStatusCard, pressed && styles.dimmed]}
+        onPress={() => onSelectTab('deck')}
+      >
+        <View style={styles.deckStatusLeft}>
+          <View style={styles.deckIconWrap}>
+            <Text style={styles.deckStatusIcon}>🃏</Text>
+          </View>
+          <View style={styles.deckTextWrap}>
+            <Text style={styles.deckStatusTitle}>Active Loadout · 8 / 8 Cards</Text>
+            <Text style={styles.deckStatusSub}>64 Troops, 3 Spells, 2 Towers · All Augments Unlocked</Text>
+          </View>
         </View>
-      </View>
-
-      {/* Pro Tips Section */}
-      <View style={styles.tipsCard}>
-        <Text style={styles.tipsHeader}>💡 GRIDIRON TACTICAL TIPS</Text>
-        <Text style={styles.tipText}>
-          • <Text style={styles.tipBold}>Flying Units:</Text> Sticky Bat & Glue Bomber fly above ground melee troops. Target them with Archers or Spitfire Wasps!
-        </Text>
-        <Text style={styles.tipText}>
-          • <Text style={styles.tipBold}>Touchdown Reset:</Text> Scoring wipes the field and gives both coaches 5 Sticky Liquid. Don&apos;t overspend right before scoring.
-        </Text>
-        <Text style={styles.tipText}>
-          • <Text style={styles.tipBold}>Comeback Draft:</Text> Conceding a touchdown immediately unlocks a Gold or Legendary augment pick!
-        </Text>
-      </View>
+        <View style={styles.editDeckPill}>
+          <Text style={styles.editDeckButtonText}>Edit ›</Text>
+        </View>
+      </Pressable>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   scroll: { flex: 1, alignSelf: 'stretch' },
-  container: { padding: 16, paddingBottom: 40, gap: 14, alignItems: 'center' },
-  header: { alignItems: 'center', gap: 6, marginVertical: 4 },
+  container: { padding: 16, paddingBottom: 40, gap: 16, alignItems: 'center' },
+  header: { alignItems: 'center', gap: 8, marginTop: 4 },
   logo: { color: '#fff', fontSize: 28, fontWeight: '900', letterSpacing: 1.5 },
   headerBadges: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' },
   userBadge: {
@@ -289,38 +245,50 @@ const styles = StyleSheet.create({
   statusDot: { fontSize: 10 },
   usernameText: { color: '#c9ccd4', fontSize: 12, fontWeight: '700' },
 
-  deckStatusCard: {
+  heroCard: {
     width: '100%',
+    backgroundColor: '#1c202a',
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1.5,
+    borderColor: 'rgba(83, 74, 183, 0.55)',
+    gap: 14,
+    shadowColor: '#534ab7',
+    shadowOpacity: 0.25,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#1c2230',
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: '#38bdf8',
+    gap: 8,
   },
-  deckStatusLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  deckStatusIcon: { fontSize: 24 },
-  deckStatusTitle: { color: '#fff', fontSize: 13, fontWeight: '800' },
-  deckStatusSub: { color: '#8a8f9c', fontSize: 11, marginTop: 1 },
-  editDeckButtonText: { color: '#38bdf8', fontSize: 13, fontWeight: '800' },
+  heroTitleWrap: { flex: 1, gap: 2 },
+  heroEyebrow: { color: '#a5b4fc', fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
+  heroTitle: { color: '#fff', fontSize: 20, fontWeight: '900', letterSpacing: 0.8 },
+  clearedPill: {
+    backgroundColor: 'rgba(6, 214, 160, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 214, 160, 0.4)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  clearedPillText: { color: '#06d6a0', fontSize: 12, fontWeight: '900', fontVariant: ['tabular-nums'] },
 
-  modeCard: {
+  progressTrack: {
     width: '100%',
-    backgroundColor: '#1c202a',
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    gap: 14,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#12141c',
+    overflow: 'hidden',
   },
-  modeCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  modeIcon: { fontSize: 26 },
-  modeHeaderText: { flex: 1 },
-  modeTitle: { color: '#fff', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
-  modeSub: { color: '#8a8f9c', fontSize: 11, marginTop: 2 },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#06d6a0',
+    borderRadius: 999,
+  },
 
   modeSpecsRow: {
     flexDirection: 'row',
@@ -336,51 +304,9 @@ const styles = StyleSheet.create({
   specLabel: { color: '#8a8f9c', fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
   specValue: { color: '#06d6a0', fontSize: 11, fontWeight: '800' },
 
-  playButton: {
-    backgroundColor: '#3b6cff',
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#3b6cff',
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  playButtonText: { color: '#fff', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
-
-  tournamentBanner: {
-    width: '100%',
-    backgroundColor: 'rgba(255, 176, 32, 0.1)',
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1.5,
-    borderColor: '#ffb020',
-    gap: 10,
-  },
-  tournamentBannerTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  tournamentTrophyIcon: { fontSize: 28 },
-  tournamentBannerText: { flex: 1 },
-  tournamentBannerTitle: { color: '#ffb020', fontSize: 15, fontWeight: '900', letterSpacing: 1 },
-  tournamentBannerSub: { color: '#d8c290', fontSize: 11, marginTop: 2 },
-  tournamentActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 176, 32, 0.2)',
-    paddingTop: 8,
-  },
-  tournamentRewardText: { color: '#06d6a0', fontSize: 11, fontWeight: '800' },
-  tournamentEnterLink: { color: '#ffb020', fontSize: 12, fontWeight: '800' },
-
-  practiceSection: { width: '100%', gap: 8 },
-  practiceHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sectionHeader: { color: '#8a8f9c', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
-  clearedCountText: { color: '#06d6a0', fontSize: 11, fontWeight: '800' },
   levelCard: {
-    backgroundColor: '#1d202b',
-    borderRadius: 12,
+    backgroundColor: '#14161f',
+    borderRadius: 14,
     padding: 10,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
@@ -392,17 +318,17 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   levelStepBtn: {
-    backgroundColor: '#2a2e3f',
-    borderRadius: 8,
-    paddingVertical: 8,
+    backgroundColor: '#282d3e',
+    borderRadius: 10,
+    paddingVertical: 10,
     paddingHorizontal: 10,
-    minWidth: 40,
+    minWidth: 42,
     alignItems: 'center',
   },
   levelStepText: { color: '#fff', fontSize: 12, fontWeight: '800' },
   levelDisplay: { flex: 1, alignItems: 'center' },
-  levelValue: { color: '#fff', fontSize: 15, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  levelMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 1 },
+  levelValue: { color: '#fff', fontSize: 18, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  levelMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
   levelTier: { color: '#06d6a0', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 },
   levelClearedBadge: {
     color: '#06d6a0',
@@ -414,37 +340,63 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.5,
   },
-  aiButtonsRow: { flexDirection: 'row', gap: 10 },
-  aiButton: {
-    flex: 1,
-    flexDirection: 'row',
+
+  playButton: {
+    backgroundColor: '#5b52d6',
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    backgroundColor: '#534ab7',
-    borderRadius: 12,
-    paddingVertical: 12,
+    shadowColor: '#5b52d6',
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
+    elevation: 6,
   },
-  aiSpectateButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 1.5,
-    borderColor: '#7f77dd',
-  },
-  aiButtonIcon: { fontSize: 16 },
-  aiButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  playButtonText: { color: '#fff', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
 
-  tipsCard: {
-    width: '100%',
-    backgroundColor: '#171922',
-    borderRadius: 14,
-    padding: 14,
-    gap: 8,
+  aiSpectateButton: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(165, 180, 252, 0.35)',
   },
-  tipsHeader: { color: '#ffb020', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
-  tipText: { color: '#9aa0ad', fontSize: 11, lineHeight: 17 },
-  tipBold: { color: '#fff', fontWeight: '700' },
+  aiSpectateText: { color: '#c7d2fe', fontSize: 12, fontWeight: '700' },
+
+  deckStatusCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1b202c',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.45)',
+    gap: 10,
+  },
+  deckStatusLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  deckIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deckStatusIcon: { fontSize: 22 },
+  deckTextWrap: { flex: 1 },
+  deckStatusTitle: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  deckStatusSub: { color: '#8a8f9c', fontSize: 11, marginTop: 2 },
+  editDeckPill: {
+    backgroundColor: 'rgba(56, 189, 248, 0.14)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  editDeckButtonText: { color: '#38bdf8', fontSize: 13, fontWeight: '800' },
 
   dimmed: { opacity: 0.5 },
 });

@@ -18,7 +18,38 @@ import { getServerUrl, socketService } from '../services/SocketService';
 // Data from GET /player/:username/collection
 // ---------------------------------------------------------------------------
 
-type Rarity = 'Common' | 'Rare' | 'Legendary';
+type Rarity = 'Common' | 'Rare' | 'Epic' | 'Legendary';
+type CardCategory = 'All' | 'Ground' | 'Flying' | 'Spells' | 'Towers';
+type CostSort = 'default' | 'asc' | 'desc';
+
+const FLYING_CARD_IDS = new Set([
+  'card_bat_flyer',
+  'card_glue_bomber',
+  'card_sky_valkyrie',
+  'card_spitfire_wasp',
+  'card_sky_falcon',
+  'card_aerial_drone',
+  'card_storm_cloud',
+  'card_tar_dragon',
+  'card_gargoyle',
+  'card_harpy',
+  'card_sky_phoenix',
+  'card_zephyr_scout',
+  'card_sonic_bat',
+  'card_sky_dreadnought',
+]);
+
+function isFlyingCard(c: Pick<CardData, 'id' | 'movement'>): boolean {
+  return c.movement === 'flying' || FLYING_CARD_IDS.has(c.id);
+}
+
+function matchesCategory(c: CardData, category: CardCategory): boolean {
+  if (category === 'All') return true;
+  if (category === 'Spells') return c.type === 'Spell';
+  if (category === 'Towers') return c.type === 'Tower';
+  if (category === 'Flying') return isFlyingCard(c);
+  return c.type !== 'Spell' && c.type !== 'Tower' && !isFlyingCard(c);
+}
 
 interface CardData {
   id: string;
@@ -73,15 +104,18 @@ interface Ghost {
   scale: SharedValue<number>;
 }
 
-const RARITY_COLOR: Record<Rarity, string> = { Common: '#b8bec9', Rare: '#4da3ff', Legendary: '#ffb020' };
+const RARITY_COLOR: Record<Rarity, string> = {
+  Common: '#b8bec9',
+  Rare: '#ffc107',
+  Epic: '#a855f7',
+  Legendary: '#ff6b35',
+};
 const TILE_WIDTH = 104;
 const TILE_HEIGHT = 58;
 const LONG_PRESS_MS = 150; // hold briefly to pick up; a quick swipe still scrolls the list
 
 const inside = (r: Rect | null | undefined, x: number, y: number) =>
   !!r && x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
-
-const hoursUntil = (iso: string) => Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 3_600_000));
 
 function pickRandomSlots(ids: string[], slotCount: number): (string | null)[] {
   const pool = [...ids];
@@ -179,7 +213,16 @@ async function fetchCollection(): Promise<Collection> {
       { id: 'card_magnet_tower', name: 'Magnet Tower', type: 'Tower', manaCost: 3 },
       { id: 'card_glue_cannon', name: 'Glue Cannon', type: 'Tower', manaCost: 4 },
     ],
-    augments: [],
+    augments: [
+      { grantId: 'test_aug_swift_boots', augmentId: 'aug_swift_boots', name: 'Swift Boots', rarity: 'Common', effectModifier: 1.05, effect: '+5% move speed', expiresAt: '' },
+      { grantId: 'test_aug_iron_skin', augmentId: 'aug_iron_skin', name: 'Iron Skin', rarity: 'Common', effectModifier: 1.1, effect: '+10% unit health', expiresAt: '' },
+      { grantId: 'test_aug_mana_surge', augmentId: 'aug_mana_surge', name: 'Mana Surge', rarity: 'Rare', effectModifier: 1.2, effect: '+20% liquid regen', expiresAt: '' },
+      { grantId: 'test_aug_berserker_rage', augmentId: 'aug_berserker_rage', name: 'Berserker Rage', rarity: 'Rare', effectModifier: 1.25, effect: '+25% unit damage', expiresAt: '' },
+      { grantId: 'test_aug_valkyrie_plate', augmentId: 'aug_valkyrie_plate', name: 'Valkyrie Plate', rarity: 'Epic', effectModifier: 1.36, effect: '+36% unit health', expiresAt: '' },
+      { grantId: 'test_aug_thunder_cleave', augmentId: 'aug_thunder_cleave', name: 'Thunder Cleave', rarity: 'Epic', effectModifier: 1.35, effect: '+35% unit damage', expiresAt: '' },
+      { grantId: 'test_aug_titans_blessing', augmentId: 'aug_titans_blessing', name: "Titan's Blessing", rarity: 'Legendary', effectModifier: 1.5, effect: '+50% unit health', expiresAt: '' },
+      { grantId: 'test_aug_phoenix_heart', augmentId: 'aug_phoenix_heart', name: 'Phoenix Heart', rarity: 'Legendary', effectModifier: 1.4, effect: '+40% attack speed', expiresAt: '' },
+    ],
     loadout: {
       unitIds: [
         'card_footsoldier',
@@ -232,6 +275,8 @@ export function DeckBuilderScreen({ onClose }: { onClose?: () => void }) {
   const [unitSlots, setUnitSlots] = useState<(string | null)[]>(() => Array(LOADOUT_UNIT_SLOTS).fill(null));
   const [augmentSlots, setAugmentSlots] = useState<(string | null)[]>(() => Array(LOADOUT_AUGMENT_SLOTS).fill(null));
   const [dragging, setDragging] = useState<DragItem | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<CardCategory>('All');
+  const [costSort, setCostSort] = useState<CostSort>('default');
 
   // Drag ghost: rendered at the screen root so it can leave the scrolling list
   const ghost: Ghost = {
@@ -397,9 +442,17 @@ export function DeckBuilderScreen({ onClose }: { onClose?: () => void }) {
     kind: 'augment',
     key: g.grantId,
     title: g.name,
-    subtitle: `${g.effect ?? `×${g.effectModifier}`} · ${hoursUntil(g.expiresAt)}h left`,
+    subtitle: `${g.effect ?? `×${g.effectModifier}`} · Unlocked (Testing)`,
     rarity: g.rarity,
   });
+
+  const filteredCards = (collection?.cards ?? [])
+    .filter((c) => matchesCategory(c, categoryFilter))
+    .sort((a, b) => {
+      if (costSort === 'asc') return a.manaCost - b.manaCost;
+      if (costSort === 'desc') return b.manaCost - a.manaCost;
+      return 0;
+    });
 
   return (
     <View ref={rootRef} style={[styles.root, !onClose && styles.rootWithTabBar]} onLayout={measureTargets}>
@@ -433,10 +486,33 @@ export function DeckBuilderScreen({ onClose }: { onClose?: () => void }) {
             </Pressable>
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.scrollContent}>
-            <Text style={styles.sectionTitle}>Unlocked Units · hold & drag</Text>
+          <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator>
+            <View style={styles.filterHeaderRow}>
+              <Text style={styles.sectionTitle}>Cards ({filteredCards.length}) · hold & drag</Text>
+              <Pressable
+                style={({ pressed }) => [styles.sortChip, pressed && styles.dimmed]}
+                onPress={() => setCostSort((s) => (s === 'default' ? 'asc' : s === 'asc' ? 'desc' : 'default'))}
+              >
+                <Text style={styles.sortChipText}>
+                  {costSort === 'default' ? 'Cost: All' : costSort === 'asc' ? 'Cost: Low→High' : 'Cost: High→Low'}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={styles.filterRow}>
+              {(['All', 'Ground', 'Flying', 'Spells', 'Towers'] as CardCategory[]).map((cat) => (
+                <Pressable
+                  key={cat}
+                  style={[styles.filterPill, categoryFilter === cat && styles.filterPillActive]}
+                  onPress={() => setCategoryFilter(cat)}
+                >
+                  <Text style={[styles.filterPillText, categoryFilter === cat && styles.filterPillTextActive]}>
+                    {cat}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
             <View style={styles.tileGrid}>
-              {collection?.cards.map((c) => (
+              {filteredCards.map((c) => (
                 <DraggableTile
                   key={c.id}
                   item={unitItem(c)}
@@ -673,13 +749,38 @@ function Slot({
 
 const styles = StyleSheet.create({
   root: { flex: 1, alignSelf: 'stretch' },
-  rootWithTabBar: { paddingBottom: 76 },
+  rootWithTabBar: { paddingBottom: 96 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 8 },
   back: { paddingVertical: 6, paddingRight: 12 },
   backText: { color: '#8fb4ff', fontSize: 16, fontWeight: '700' },
   title: { color: '#fff', fontSize: 20, fontWeight: '800' },
   username: { color: '#8a8f9c', fontSize: 12, minWidth: 60, textAlign: 'right' },
-  half: { flex: 1 },
+  half: { flex: 1, minHeight: 0 },
+  filterHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
+  filterPill: {
+    backgroundColor: '#202430',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  filterPillActive: {
+    backgroundColor: 'rgba(56, 189, 248, 0.16)',
+    borderColor: '#38bdf8',
+  },
+  filterPillText: { color: '#8a8f9c', fontSize: 11, fontWeight: '700' },
+  filterPillTextActive: { color: '#38bdf8', fontWeight: '800' },
+  sortChip: {
+    backgroundColor: '#232836',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  sortChipText: { color: '#c9ccd4', fontSize: 10, fontWeight: '800' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   error: { color: '#ff8a8a', textAlign: 'center' },
   empty: { color: '#8a8f9c', fontSize: 13, marginBottom: 8 },

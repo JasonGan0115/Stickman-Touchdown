@@ -67,7 +67,7 @@ export interface Score {
 
 export interface AugmentReward {
   name: string;
-  rarity: 'Common' | 'Rare' | 'Legendary';
+  rarity: 'Common' | 'Rare' | 'Epic' | 'Legendary';
   effectModifier: number;
   effect?: string | null; // e.g. "+10% unit health"
   expiresAt: string;
@@ -106,7 +106,7 @@ export interface MatchResults {
 export interface AugmentDraftOption {
   id: string;
   name: string;
-  rarity: 'Common' | 'Rare' | 'Legendary';
+  rarity: 'Common' | 'Rare' | 'Epic' | 'Legendary';
   stat: string;
   modifier: number;
   effect: string;
@@ -116,6 +116,8 @@ export interface DraftModalState {
   active: boolean;
   type: 'silver_kickoff' | 'comeback';
   options: AugmentDraftOption[];
+  role?: 'winner' | 'loser';
+  tierLabel?: string;
 }
 
 export interface MatchStartInfo {

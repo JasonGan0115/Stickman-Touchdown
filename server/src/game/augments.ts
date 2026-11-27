@@ -3,7 +3,7 @@
 // two can't drift apart). Every augment in a player's loadout multiplies one
 // stat for that whole match; copies of the same stat stack by multiplying.
 
-export type AugmentRarity = "Common" | "Rare" | "Legendary";
+export type AugmentRarity = "Common" | "Rare" | "Epic" | "Legendary";
 
 /** Stats an augment can boost. `attackSpeed` shortens the time between hits. */
 export type BoostedStat = "health" | "damage" | "attackSpeed" | "range" | "speed" | "manaRegen";
@@ -98,6 +98,20 @@ export const AUGMENTS: Record<string, AugmentDef> = {
   aug_aegis_coating: { id: "aug_aegis_coating", name: "Aegis Coating", rarity: "Rare", stat: "health", modifier: 1.27 },
   aug_sonic_heels: { id: "aug_sonic_heels", name: "Sonic Heels", rarity: "Rare", stat: "speed", modifier: 1.2 },
 
+  // --- Epic: 12 comeback augments bridging Gold and Legendary ---
+  aug_valkyrie_plate: { id: "aug_valkyrie_plate", name: "Valkyrie Plate", rarity: "Epic", stat: "health", modifier: 1.36 },
+  aug_obsidian_shell: { id: "aug_obsidian_shell", name: "Obsidian Shell", rarity: "Epic", stat: "health", modifier: 1.38 },
+  aug_thunder_cleave: { id: "aug_thunder_cleave", name: "Thunder Cleave", rarity: "Epic", stat: "damage", modifier: 1.35 },
+  aug_crimson_fury: { id: "aug_crimson_fury", name: "Crimson Fury", rarity: "Epic", stat: "damage", modifier: 1.37 },
+  aug_gale_stride: { id: "aug_gale_stride", name: "Gale Stride", rarity: "Epic", stat: "speed", modifier: 1.22 },
+  aug_warp_cleats: { id: "aug_warp_cleats", name: "Warp Cleats", rarity: "Epic", stat: "speed", modifier: 1.23 },
+  aug_eagle_crest: { id: "aug_eagle_crest", name: "Eagle Crest", rarity: "Epic", stat: "range", modifier: 1.28 },
+  aug_deadeye_visor: { id: "aug_deadeye_visor", name: "Deadeye Visor", rarity: "Epic", stat: "range", modifier: 1.3 },
+  aug_overclock_gloves: { id: "aug_overclock_gloves", name: "Overclock Gloves", rarity: "Epic", stat: "attackSpeed", modifier: 1.32 },
+  aug_cyclone_rhythm: { id: "aug_cyclone_rhythm", name: "Cyclone Rhythm", rarity: "Epic", stat: "attackSpeed", modifier: 1.34 },
+  aug_mana_conduit: { id: "aug_mana_conduit", name: "Mana Conduit", rarity: "Epic", stat: "manaRegen", modifier: 1.32 },
+  aug_surge_reactor: { id: "aug_surge_reactor", name: "Surge Reactor", rarity: "Epic", stat: "manaRegen", modifier: 1.35 },
+
   // --- Legendary: 24 augments ---
   aug_titans_blessing: { id: "aug_titans_blessing", name: "Titan's Blessing", rarity: "Legendary", stat: "health", modifier: 1.5 },
   aug_phoenix_heart: { id: "aug_phoenix_heart", name: "Phoenix Heart", rarity: "Legendary", stat: "attackSpeed", modifier: 1.4 },
@@ -174,19 +188,32 @@ export function describeModifiers(mods: Modifiers): string[] {
   return BOOSTED_STATS.filter((s) => mods[s] !== 1).map((s) => describeBoost(s, mods[s]));
 }
 
+export type DraftTier = "silver" | "common" | "gold" | "epic" | "legendary" | "gold_or_legendary";
+
+const TIER_RARITIES: Record<DraftTier, AugmentRarity[]> = {
+  silver: ["Common"],
+  common: ["Common"],
+  gold: ["Rare"],
+  epic: ["Epic"],
+  legendary: ["Legendary"],
+  gold_or_legendary: ["Rare", "Legendary"],
+};
+
 /**
  * Returns distinct augment options for in-match drafting:
- * - "silver": 3 Common augments for kickoff
- * - "gold_or_legendary": 3 Rare or Legendary augments for comeback after conceding
+ * - "silver" / "common": Common augments for kickoff
+ * - "gold": Rare augments for round winner
+ * - "epic": Epic augments for round loser comeback
+ * - "legendary": Legendary augments for late-round escalation
+ * - "gold_or_legendary": Rare or Legendary augments (legacy compatibility)
  */
 export function getDraftOptions(
-  tier: "silver" | "gold_or_legendary",
+  tier: DraftTier,
   count = 3,
   rng: () => number = Math.random,
 ): (AugmentDef & { effect: string })[] {
-  const pool = Object.values(AUGMENTS).filter((a) =>
-    tier === "silver" ? a.rarity === "Common" : a.rarity === "Rare" || a.rarity === "Legendary",
-  );
+  const allowed = TIER_RARITIES[tier];
+  const pool = Object.values(AUGMENTS).filter((a) => allowed.includes(a.rarity));
 
   const shuffled = [...pool];
   for (let i = shuffled.length - 1; i > 0; i--) {

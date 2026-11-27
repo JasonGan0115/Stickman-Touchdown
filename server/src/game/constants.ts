@@ -29,7 +29,7 @@ export const ENDZONE_DEPTH = FIELD_HEIGHT * 0.15; // 96: each endzone is 15% of 
 export const MAX_MANA = 10;
 export const STARTING_MANA = 3; // Starts with 3 sticky liquid
 export const RESET_MANA_ON_SCORE = 5; // Reset to 5 sticky liquid after touchdown
-export const MANA_PER_SECOND = 1;
+export const MANA_PER_SECOND = 0.5;
 export const MANA_PER_TICK = MANA_PER_SECOND / TICK_RATE;
 
 // --- Cooldowns ---

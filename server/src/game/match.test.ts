@@ -6,8 +6,10 @@ import {
   AUGMENT_DURATION_MS,
   ENDZONE_DEPTH,
   FIELD_HEIGHT,
+  MANA_PER_SECOND,
   MAX_MANA,
   OVERTIME_MANA_MULTIPLIER,
+  SPAWN_COOLDOWN_TICKS,
   TICK_RATE,
   WINNING_SCORE,
 } from "./constants";
@@ -224,6 +226,8 @@ describe("stepMatch", () => {
     assert.equal(match.entities.length, 0, "field cleared on touchdown");
     assert.equal(p1.mana, 5, "scorer liquid set to 5");
     assert.equal(p2.mana, 5, "defender liquid set to 5");
+    assert.equal(p1.spawnCooldownTicks, SPAWN_COOLDOWN_TICKS, "scorer spawn cooldown reset to 1s");
+    assert.equal(p2.spawnCooldownTicks, SPAWN_COOLDOWN_TICKS, "defender spawn cooldown reset to 1s");
   });
 
   test("first player to 3 touchdowns wins the match immediately", () => {
@@ -305,8 +309,8 @@ describe("augments", () => {
     const match = withAugments("aug_mana_surge");
     steps(match, TICK_RATE); // one second
     const [boosted, normal] = match.players;
-    assert.ok(Math.abs(boosted.mana - (3 + 1.2)) < 1e-9);
-    assert.ok(Math.abs(normal.mana - (3 + 1)) < 1e-9);
+    assert.ok(Math.abs(boosted.mana - (3 + MANA_PER_SECOND * 1.2)) < 1e-9);
+    assert.ok(Math.abs(normal.mana - (3 + MANA_PER_SECOND)) < 1e-9);
   });
 });
 
@@ -329,7 +333,19 @@ describe("draft and scouting", () => {
     }
   });
 
-  test("getDraftOptions gold_or_legendary returns Rare or Legendary augments", () => {
+  test("getDraftOptions gold, epic, legendary, and gold_or_legendary return matching rarities", () => {
+    const gold = getDraftOptions("gold", 3);
+    assert.equal(gold.length, 3);
+    for (const o of gold) assert.equal(o.rarity, "Rare");
+
+    const epic = getDraftOptions("epic", 3);
+    assert.equal(epic.length, 3);
+    for (const o of epic) assert.equal(o.rarity, "Epic");
+
+    const legendary = getDraftOptions("legendary", 3);
+    assert.equal(legendary.length, 3);
+    for (const o of legendary) assert.equal(o.rarity, "Legendary");
+
     const options = getDraftOptions("gold_or_legendary", 3);
     assert.equal(options.length, 3);
     assert.equal(new Set(options.map((o) => o.id)).size, 3);
@@ -348,13 +364,14 @@ describe("draft and scouting", () => {
     assert.ok(Math.abs(p1.modifiers.health - 1.1) < 1e-9);
   });
 
-  test("100-augment catalog has 100 unique augments across Common, Rare, and Legendary", () => {
+  test("augment catalog has unique augments across Common, Rare, Epic, and Legendary", () => {
     const all = Object.values(AUGMENTS);
-    assert.equal(all.length, 100);
-    assert.equal(new Set(all.map((a) => a.id)).size, 100);
-    assert.equal(new Set(all.map((a) => a.name)).size, 100);
+    assert.equal(all.length, 112);
+    assert.equal(new Set(all.map((a) => a.id)).size, 112);
+    assert.equal(new Set(all.map((a) => a.name)).size, 112);
     assert.ok(all.some((a) => a.rarity === "Common"));
     assert.ok(all.some((a) => a.rarity === "Rare"));
+    assert.ok(all.some((a) => a.rarity === "Epic"));
     assert.ok(all.some((a) => a.rarity === "Legendary"));
     for (const a of all) assert.ok(a.modifier > 1);
   });
@@ -473,7 +490,10 @@ describe("sudden-death overtime", () => {
 
     const manaBefore = p1.mana;
     steps(match, TICK_RATE);
-    assert.ok(Math.abs(p1.mana - (manaBefore + OVERTIME_MANA_MULTIPLIER)) < 1e-9, "1.5x mana regen in overtime");
+    assert.ok(
+      Math.abs(p1.mana - (manaBefore + MANA_PER_SECOND * OVERTIME_MANA_MULTIPLIER)) < 1e-9,
+      "1.5x mana regen in overtime",
+    );
 
     // Next TD wins immediately and skips roundReset/comeback draft
     addUnit(match, p1, FOOT, 180, ENDZONE_DEPTH + FOOT.speed);

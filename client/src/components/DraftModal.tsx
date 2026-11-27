@@ -7,10 +7,11 @@ import { soundService } from '../services/SoundService';
 import type { AugmentDraftOption, GameStore, HandCard } from '../store/useGameStore';
 import { Stickman } from './Stickman';
 
-const RARITY_COLORS = {
+const RARITY_COLORS: Record<AugmentDraftOption['rarity'], string> = {
   Common: '#c0c8d8', // Silver
   Rare: '#ffc107', // Gold
-  Legendary: '#a855f7', // Purple
+  Epic: '#a855f7', // Purple
+  Legendary: '#ff6b35', // Legendary Orange-Gold
 };
 
 interface Props {
@@ -87,12 +88,22 @@ export const DraftModal = memo(function DraftModal({ store, service }: Props) {
             </View>
           )}
           <Text style={[styles.draftTitle, isComeback && styles.comebackTitle]}>
-            {isKickoff ? '⚡ CHOOSE KICKOFF AUGMENT' : '🔥 COMEBACK DRAFT: CHOOSE UPGRADE'}
+            {isKickoff
+              ? '⚡ CHOOSE KICKOFF AUGMENT'
+              : draftModal.role === 'winner'
+                ? draftModal.tierLabel === 'LEGENDARY'
+                  ? '🏆 ROUND WON · LEGENDARY AUGMENT'
+                  : '🏆 ROUND WON · GOLD AUGMENT'
+                : draftModal.tierLabel === 'LEGENDARY'
+                  ? '🔥 FINAL COMEBACK · LEGENDARY'
+                  : '⚡ COMEBACK · EPIC AUGMENT'}
           </Text>
           <Text style={styles.draftSub}>
             {isKickoff
               ? 'Select 1 Silver augment before troop deployment begins:'
-              : 'Opponent scored! Pick 1 Gold or Legendary augment to turn the tide:'}
+              : draftModal.role === 'winner'
+                ? 'You scored! Pick 1 augment to press your advantage:'
+                : 'Opponent scored! Pick 1 comeback augment to turn the tide:'}
           </Text>
 
           <View style={styles.optionsRow}>
@@ -106,7 +117,7 @@ export const DraftModal = memo(function DraftModal({ store, service }: Props) {
                 >
                   <View style={[styles.rarityBadge, { backgroundColor: border }]}>
                     <Text style={styles.rarityBadgeText}>
-                      {aug.rarity === 'Common' ? 'SILVER' : aug.rarity.toUpperCase()}
+                      {aug.rarity === 'Common' ? 'SILVER' : aug.rarity === 'Rare' ? 'GOLD' : aug.rarity.toUpperCase()}
                     </Text>
                   </View>
                   <Text style={styles.augName} numberOfLines={1}>

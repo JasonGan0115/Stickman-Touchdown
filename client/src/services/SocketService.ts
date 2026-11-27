@@ -43,7 +43,7 @@ function spawnRejectionText(reason: string, cost?: number): string {
     case 'not_enough_mana':
       return cost ? `Need ${cost} Sticky Liquid` : 'Not enough Sticky Liquid';
     case 'cooldown_active':
-      return 'Placement cooldown active (2s)';
+      return 'Placement cooldown active (1s)';
     case 'outside_home_endzone':
       return 'Server: outside your endzone';
     case 'outside_defensive_zone':
@@ -212,10 +212,21 @@ export class SocketService {
       state().setBoosts(boosts ?? []);
       state().setDraftModal(null);
     });
-    socket.on('comeback_draft', ({ options }: { options: AugmentDraftOption[] }) => {
-      if (state().matchStatus !== 'in_match' || !options?.length) return;
-      state().setDraftModal({ active: true, type: 'comeback', options });
-    });
+    socket.on(
+      'comeback_draft',
+      ({
+        options,
+        role,
+        tierLabel,
+      }: {
+        options: AugmentDraftOption[];
+        role?: 'winner' | 'loser';
+        tierLabel?: string;
+      }) => {
+        if (state().matchStatus !== 'in_match' || !options?.length) return;
+        state().setDraftModal({ active: true, type: 'comeback', options, role, tierLabel });
+      },
+    );
     socket.on('hand_update', ({ hand, nextCard }: { hand: HandCard[]; nextCard: HandCard | null }) => {
       state().setHandUpdate(hand ?? [], nextCard ?? null);
     });
