@@ -5,6 +5,7 @@ import {
   MANA_PER_TICK,
   MATCH_DURATION_MS,
   MAX_MANA,
+  OVERTIME_MANA_MULTIPLIER,
   RESET_MANA_ON_SCORE,
   SPAWN_COOLDOWN_TICKS,
   STARTING_MANA,
@@ -13,7 +14,17 @@ import {
 } from "./constants";
 import { combineAugments, type Modifiers } from "./augments";
 import { getTroopStatMultiplier } from "./troopLevels";
-import { getUnitStats, resolveHand, type MovementType, type UnitStats, type UnitType } from "./units";
+import {
+  getSpellStats,
+  getTowerStats,
+  getUnitStats,
+  resolveHand,
+  type MovementType,
+  type SpellStats,
+  type TowerStats,
+  type UnitStats,
+  type UnitType,
+} from "./units";
 
 // Pure match state + rules. No sockets or timers here, so it can be tested on its own.
 
@@ -28,7 +39,7 @@ export interface Loadout {
 export interface Entity {
   id: string;
   cardId: string;
-  type: UnitType;
+  type: UnitType | "Tower";
   movement: MovementType;
   ownerId: string; // socket id of the player who spawned it
   x: number;
@@ -44,6 +55,14 @@ export interface Entity {
   targetId: string | null;
   attackCooldown: number; // ticks until this unit may hit again
   lastHitTick: number; // match tick of this unit's latest hit, -1 if it hasn't hit yet (drives client animations)
+  isBuilding?: boolean;
+  lifetimeTicks?: number;
+  tauntRadius?: number;
+  applySlowFactor?: number;
+  applySlowDurationTicks?: number;
+  slowUntilTick?: number;
+  slowFactor?: number;
+  stunUntilTick?: number;
 }
 
 export interface PlayerState {
@@ -61,14 +80,18 @@ export interface PlayerState {
   playedCardCounts: Record<string, number>; // cardId -> spawn count during this match
 }
 
+export type MatchPhase = "kickoff" | "playing" | "comeback_draft";
+
 export interface Match {
   id: string; // also the Socket.io room name
   mode: MatchMode;
+  phase: MatchPhase;
   players: [PlayerState, PlayerState];
   entities: Entity[];
   tick: number;
   nextTickAt: number; // epoch ms when the next tick is due
   endsAt: number; // epoch ms
+  overtime?: boolean;
   ended: boolean;
   nextEntityNumber: number;
   interval?: NodeJS.Timeout;
@@ -87,7 +110,8 @@ export type SpawnRejection =
   | "card_not_in_hand"
   | "not_enough_mana"
   | "cooldown_active"
-  | "outside_home_endzone";
+  | "outside_home_endzone"
+  | "outside_defensive_zone";
 
 /** Things that happened during a tick, for logging. */
 export interface TickEvents {
@@ -125,11 +149,13 @@ export function createMatch(id: string, mode: MatchMode, p1: MatchSeat, p2: Matc
   return {
     id,
     mode,
+    phase: "playing",
     players: [player(p1, 1), player(p2, 2)],
     entities: [],
     tick: 0,
     nextTickAt: now + TICK_MS,
     endsAt: now + MATCH_DURATION_MS,
+    overtime: false,
     ended: false,
     nextEntityNumber: 1,
   };
@@ -145,6 +171,13 @@ export function getOpponent(match: Match, socketId: string): PlayerState | undef
 
 export function isInHomeEndzone(player: PlayerNumber, y: number): boolean {
   return player === 1 ? y >= FIELD_HEIGHT - ENDZONE_DEPTH : y <= ENDZONE_DEPTH;
+}
+
+/** Defensive quarter-zone where deployable towers may be placed. */
+export function isInDefensiveZone(player: PlayerNumber, y: number): boolean {
+  return player === 1
+    ? y >= FIELD_HEIGHT * 0.65 && y <= FIELD_HEIGHT - 20
+    : y >= 20 && y <= FIELD_HEIGHT * 0.35;
 }
 
 /** True once an entity owned by `player` has reached the opponent's endzone. */
@@ -187,40 +220,127 @@ export function addUnit(match: Match, player: PlayerState, stats: UnitStats, x: 
   return entity;
 }
 
-/** Validates and applies a spawn request. Mutates the match on success. */
+/** Creates a deployable defensive tower for `player` and adds it to the field. */
+export function addTower(match: Match, player: PlayerState, stats: TowerStats, x: number, y: number): Entity {
+  const mods = player.modifiers;
+  const levelMult = getTroopStatMultiplier(player.troopLevels?.[stats.cardId] ?? 1);
+  const health = Math.round(stats.health * mods.health * levelMult);
+  const entity: Entity = {
+    id: `tower_${match.nextEntityNumber++}`,
+    cardId: stats.cardId,
+    type: "Tower",
+    movement: "walking",
+    ownerId: player.id,
+    x,
+    y,
+    health,
+    maxHealth: health,
+    damage: Math.round(stats.damage * mods.damage * levelMult),
+    attackRange: stats.attackRange * mods.range,
+    attackIntervalTicks: Math.max(1, Math.round(stats.attackIntervalTicks / mods.attackSpeed)),
+    speed: 0,
+    splashRadius: stats.splashRadius,
+    state: "moving",
+    targetId: null,
+    attackCooldown: 0,
+    lastHitTick: -1,
+    isBuilding: true,
+    lifetimeTicks: stats.lifetimeTicks,
+    tauntRadius: stats.tauntRadius,
+    applySlowFactor: stats.slowFactor,
+    applySlowDurationTicks: stats.slowDurationTicks,
+  };
+  match.entities.push(entity);
+  return entity;
+}
+
+function cycleHandCard(player: PlayerState, cardId: string): void {
+  if (player.drawQueue.length > 0) {
+    const nextCard = player.drawQueue.shift()!;
+    const handIndex = player.hand.indexOf(cardId);
+    if (handIndex !== -1) {
+      player.hand[handIndex] = nextCard;
+    } else {
+      player.hand.push(nextCard);
+    }
+    player.drawQueue.push(cardId);
+  }
+}
+
+export type TrySpawnResult =
+  | { ok: true; isSpell?: false; entity: Entity; stats: UnitStats | TowerStats; hand: string[]; drawQueue: string[] }
+  | { ok: true; isSpell: true; spell: SpellStats; x: number; y: number; hand: string[]; drawQueue: string[] }
+  | { ok: false; reason: SpawnRejection; cost?: number; cooldownTicks?: number };
+
+/** Applies a tactical spell at (x, y) on enemy entities within radius. */
+function applySpellEffect(match: Match, player: PlayerState, spell: SpellStats, x: number, y: number): void {
+  const minSafeY = ENDZONE_DEPTH + 1;
+  const maxSafeY = FIELD_HEIGHT - ENDZONE_DEPTH - 1;
+
+  for (const target of match.entities) {
+    if (target.ownerId === player.id) continue;
+    const dx = target.x - x;
+    const dy = target.y - y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > spell.radius) continue;
+
+    if (spell.damage > 0) {
+      target.health = Math.max(0, target.health - spell.damage);
+    }
+    if (spell.stunDurationTicks) {
+      target.stunUntilTick = Math.max(target.stunUntilTick ?? 0, match.tick + spell.stunDurationTicks);
+    }
+    if (spell.slowFactor !== undefined && spell.slowDurationTicks) {
+      target.slowFactor = spell.slowFactor;
+      target.slowUntilTick = Math.max(target.slowUntilTick ?? 0, match.tick + spell.slowDurationTicks);
+    }
+    // Glue Freeze gently pulls non-building units toward the cast center, clamped outside both endzones
+    if (spell.cardId === "card_glue_freeze" && !target.isBuilding && dist > 1) {
+      const pull = 0.25;
+      target.x = Math.min(FIELD_WIDTH, Math.max(0, target.x - dx * pull));
+      target.y = Math.min(maxSafeY, Math.max(minSafeY, target.y - dy * pull));
+    }
+  }
+}
+
+/** Validates and applies a spawn or spell cast request. Mutates the match on success. */
 export function trySpawn(
   match: Match,
   player: PlayerState,
   cardId: unknown,
   x: unknown,
   y: unknown,
-): { ok: true; entity: Entity; stats: UnitStats; hand: string[]; drawQueue: string[] } | { ok: false; reason: SpawnRejection; cost?: number; cooldownTicks?: number } {
+): TrySpawnResult {
   if (!inRange(x, FIELD_WIDTH) || !inRange(y, FIELD_HEIGHT)) return { ok: false, reason: "invalid_coordinates" };
-  const stats = getUnitStats(cardId);
-  if (!stats) return { ok: false, reason: "unknown_card" };
-  if (!player.hand.includes(stats.cardId)) return { ok: false, reason: "card_not_in_hand" };
+
+  const spell = getSpellStats(cardId);
+  const tower = getTowerStats(cardId);
+  const unit = getUnitStats(cardId);
+  const card = spell ?? tower ?? unit;
+  if (!card) return { ok: false, reason: "unknown_card" };
+  if (!player.hand.includes(card.cardId)) return { ok: false, reason: "card_not_in_hand" };
   if (player.spawnCooldownTicks > 0) return { ok: false, reason: "cooldown_active", cooldownTicks: player.spawnCooldownTicks };
-  if (player.mana < stats.cost) return { ok: false, reason: "not_enough_mana", cost: stats.cost };
-  if (!isInHomeEndzone(player.number, y)) return { ok: false, reason: "outside_home_endzone" };
+  if (player.mana < card.cost) return { ok: false, reason: "not_enough_mana", cost: card.cost };
 
-  player.mana -= stats.cost;
-  player.spawnCooldownTicks = SPAWN_COOLDOWN_TICKS;
-
-  // Clash Royale style card recycling: replace card in hand with top card from drawQueue
-  if (player.drawQueue.length > 0) {
-    const nextCard = player.drawQueue.shift()!;
-    const handIndex = player.hand.indexOf(stats.cardId);
-    if (handIndex !== -1) {
-      player.hand[handIndex] = nextCard;
-    } else {
-      player.hand.push(nextCard);
-    }
-    player.drawQueue.push(stats.cardId);
+  if (tower && !isInDefensiveZone(player.number, y)) {
+    return { ok: false, reason: "outside_defensive_zone" };
+  }
+  if (unit && !isInHomeEndzone(player.number, y)) {
+    return { ok: false, reason: "outside_home_endzone" };
   }
 
-  const entity = addUnit(match, player, stats, x, y);
-  player.playedCardCounts[stats.cardId] = (player.playedCardCounts[stats.cardId] ?? 0) + 1;
-  return { ok: true, entity, stats, hand: player.hand, drawQueue: player.drawQueue };
+  player.mana -= card.cost;
+  player.spawnCooldownTicks = SPAWN_COOLDOWN_TICKS;
+  cycleHandCard(player, card.cardId);
+  player.playedCardCounts[card.cardId] = (player.playedCardCounts[card.cardId] ?? 0) + 1;
+
+  if (spell) {
+    applySpellEffect(match, player, spell, x, y);
+    return { ok: true, isSpell: true, spell, x, y, hand: player.hand, drawQueue: player.drawQueue };
+  }
+
+  const entity = tower ? addTower(match, player, tower, x, y) : addUnit(match, player, unit!, x, y);
+  return { ok: true, isSpell: false, entity, stats: (tower ?? unit)!, hand: player.hand, drawQueue: player.drawQueue };
 }
 
 /** Pythagorean distance between two units' centres. */
@@ -242,23 +362,56 @@ function distance(a: Entity, b: Entity): number {
  */
 export function stepMatch(match: Match): TickEvents {
   const events: TickEvents = { scored: [], engaged: [], hits: [], killed: [], roundReset: false };
+  const manaMultiplier = match.overtime ? OVERTIME_MANA_MULTIPLIER : 1;
 
   for (const p of match.players) {
-    p.mana = Math.min(MAX_MANA, p.mana + MANA_PER_TICK * p.modifiers.manaRegen);
+    p.mana = Math.min(MAX_MANA, p.mana + MANA_PER_TICK * p.modifiers.manaRegen * manaMultiplier);
     if (p.spawnCooldownTicks > 0) p.spawnCooldownTicks--;
   }
 
-  // 2. Targeting
-  const targets = new Map<Entity, Entity>();
+  // Decay deployable towers over their lifetime
   for (const unit of match.entities) {
+    if (unit.isBuilding && unit.lifetimeTicks && unit.lifetimeTicks > 0 && unit.health > 0) {
+      unit.health = Math.max(0, unit.health - unit.maxHealth / unit.lifetimeTicks);
+    }
+  }
+
+  const isStunned = (u: Entity) => match.tick < (u.stunUntilTick ?? 0);
+  const canHit = (attacker: Entity, target: Entity) =>
+    !(target.movement === "flying" && attacker.movement !== "flying" && attacker.type !== "Ranged" && attacker.type !== "Caster" && attacker.type !== "Tower");
+
+  // 2. Targeting (plus Magnet Tower taunt tracking)
+  const targets = new Map<Entity, Entity>();
+  const tauntedBy = new Map<Entity, Entity>();
+  for (const unit of match.entities) {
+    if (isStunned(unit)) {
+      unit.state = "moving";
+      unit.targetId = null;
+      continue;
+    }
+
+    // Check if an enemy Magnet Tower taunts this non-building unit
+    if (!unit.isBuilding) {
+      let nearestTaunt: Entity | undefined;
+      let nearestTauntDist = Infinity;
+      for (const other of match.entities) {
+        if (other.ownerId === unit.ownerId || !other.tauntRadius || other.health <= 0) continue;
+        const d = distance(unit, other);
+        if (d <= other.tauntRadius && d < nearestTauntDist) {
+          nearestTaunt = other;
+          nearestTauntDist = d;
+        }
+      }
+      if (nearestTaunt) {
+        tauntedBy.set(unit, nearestTaunt);
+      }
+    }
+
     let nearest: Entity | undefined;
     let nearestDist = Infinity;
     for (const other of match.entities) {
-      if (other.ownerId === unit.ownerId) continue;
-      // Ground Melee & Tank units only attack ground troops; Ranged, Caster, and Flying units attack both Air & Ground
-      if (other.movement === "flying" && unit.movement !== "flying" && unit.type !== "Ranged" && unit.type !== "Caster") {
-        continue;
-      }
+      if (other.ownerId === unit.ownerId || other.health <= 0) continue;
+      if (!canHit(unit, other)) continue;
       const d = distance(unit, other);
       if (d <= unit.attackRange && d < nearestDist) {
         nearest = other;
@@ -280,20 +433,30 @@ export function stepMatch(match: Match): TickEvents {
   }
 
   // 3. Damage
+  const applyOnHitSlow = (attacker: Entity, victim: Entity) => {
+    if (attacker.applySlowFactor !== undefined && attacker.applySlowDurationTicks) {
+      victim.slowFactor = attacker.applySlowFactor;
+      victim.slowUntilTick = Math.max(victim.slowUntilTick ?? 0, match.tick + attacker.applySlowDurationTicks);
+    }
+  };
+
   for (const unit of match.entities) {
     if (unit.attackCooldown > 0) unit.attackCooldown--;
+    if (isStunned(unit)) continue;
     const target = targets.get(unit);
     if (target && unit.attackCooldown === 0) {
       target.health = Math.max(0, target.health - unit.damage);
+      applyOnHitSlow(unit, target);
       unit.attackCooldown = unit.attackIntervalTicks;
       unit.lastHitTick = match.tick;
       events.hits.push({ attacker: unit, target, splash: false });
 
       if (unit.splashRadius > 0) {
         for (const other of match.entities) {
-          if (other === target || other.ownerId === unit.ownerId) continue;
+          if (other === target || other.ownerId === unit.ownerId || other.health <= 0) continue;
           if (distance(other, target) <= unit.splashRadius) {
             other.health = Math.max(0, other.health - unit.damage);
+            applyOnHitSlow(unit, other);
             events.hits.push({ attacker: unit, target: other, splash: true });
           }
         }
@@ -312,13 +475,29 @@ export function stepMatch(match: Match): TickEvents {
     const owner = getPlayer(match, unit.ownerId);
     if (!owner) continue; // owner gone; drop the unit
 
-    if (unit.state === "moving") {
-      // Player 1 attacks up the field (y decreases), Player 2 attacks down (y increases)
-      unit.y += owner.number === 1 ? -unit.speed : unit.speed;
+    if (unit.state === "moving" && !unit.isBuilding && unit.speed > 0 && !isStunned(unit)) {
+      const slowMult = match.tick < (unit.slowUntilTick ?? 0) ? (unit.slowFactor ?? 1) : 1;
+      const effectiveSpeed = unit.speed * slowMult;
+      const tauntTower = tauntedBy.get(unit);
+
+      if (tauntTower && tauntTower.health > 0) {
+        const dx = tauntTower.x - unit.x;
+        const dy = tauntTower.y - unit.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 1e-6) {
+          const step = Math.min(effectiveSpeed, dist);
+          unit.x += (dx / dist) * step;
+          unit.y += (dy / dist) * step;
+        }
+      } else {
+        // Player 1 attacks up the field (y decreases), Player 2 attacks down (y increases)
+        unit.y += owner.number === 1 ? -effectiveSpeed : effectiveSpeed;
+      }
+
       if (hasReachedEnemyEndzone(owner.number, unit.y)) {
         owner.score++;
         events.scored.push({ scorer: owner, entity: unit });
-        continue;
+        break;
       }
     }
     survivors.push(unit);
@@ -326,20 +505,23 @@ export function stepMatch(match: Match): TickEvents {
   match.entities = survivors;
 
   // 6. Touchdown round reset: wipe active units, give both players 5 sticky liquid, reset cooldowns
-  if (events.scored.length > 0 && !getScoreLimitWinner(match)) {
+  if (events.scored.length > 0) {
     match.entities = [];
-    events.roundReset = true;
-    for (const p of match.players) {
-      p.mana = RESET_MANA_ON_SCORE;
-      p.spawnCooldownTicks = 0;
+    if (!getScoreLimitWinner(match)) {
+      events.roundReset = true;
+      for (const p of match.players) {
+        p.mana = RESET_MANA_ON_SCORE;
+        p.spawnCooldownTicks = 0;
+      }
     }
   }
 
   return events;
 }
 
-/** The player who has reached the winning score, if any. */
+/** The player who has reached the winning score (or any lead in sudden-death overtime). */
 export function getScoreLimitWinner(match: Match): PlayerState | undefined {
+  if (match.overtime) return getLeader(match);
   return match.players.find((p) => p.score >= WINNING_SCORE);
 }
 

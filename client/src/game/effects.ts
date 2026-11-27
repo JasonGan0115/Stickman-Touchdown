@@ -18,10 +18,12 @@ interface EffectBase {
 export type Effect =
   | (EffectBase & { kind: 'projectile'; style: 'arrow' | 'blast'; fromX: number; fromY: number; toX: number; toY: number; ownerId: string })
   | (EffectBase & { kind: 'damage'; x: number; y: number; amount: number })
-  | (EffectBase & { kind: 'death'; entity: Entity });
+  | (EffectBase & { kind: 'death'; entity: Entity })
+  | (EffectBase & { kind: 'spell'; cardId: string; x: number; y: number; radius: number; ownerId: string });
 
 let nextId = 1;
-const newId = (kind: string) => `${kind}_${nextId++}`;
+export const newEffectId = (kind: string) => `${kind}_${nextId++}`;
+const newId = newEffectId;
 
 export function deriveEffects(prev: Entity[], next: Entity[], killedIds: string[], now: number): Effect[] {
   if (!prev.length && !killedIds.length) return [];

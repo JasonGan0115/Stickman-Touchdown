@@ -1,19 +1,20 @@
 import { create, type StateCreator } from 'zustand';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
-import { deriveEffects, updateEffects, type Effect } from '../game/effects';
+import { deriveEffects, newEffectId, updateEffects, type Effect } from '../game/effects';
 
 export type MatchStatus = 'idle' | 'queued' | 'in_match' | 'ended';
 export type MatchMode = 'standard' | 'tournament';
 export type PlayerNumber = 1 | 2;
 export type UnitType = 'Melee' | 'Ranged' | 'Tank' | 'Caster';
+export type CardType = UnitType | 'Spell' | 'Tower';
 export type MovementType = 'walking' | 'running' | 'sliding' | 'flying';
 
-/** A unit on the field, in server world units (see FIELD_WIDTH/FIELD_HEIGHT; y=0 is Player 1's top). */
+/** A unit or tower on the field, in server world units (see FIELD_WIDTH/FIELD_HEIGHT; y=0 is Player 1's top). */
 export interface Entity {
   id: string;
   cardId: string;
-  type: UnitType;
+  type: UnitType | 'Tower';
   movement?: MovementType;
   ownerId: string; // socket id of the owning player
   x: number;
@@ -40,7 +41,7 @@ export interface Loadout {
 export interface HandCard {
   cardId: string;
   name: string;
-  type: UnitType;
+  type: CardType;
   movement?: MovementType;
   cost: number;
 }
@@ -126,13 +127,17 @@ export interface MatchStartInfo {
   nextCard?: HandCard | null;
   opponentPreview?: HandCard[];
   silverDraftOptions?: AugmentDraftOption[];
+  kickoffDurationMs?: number;
   boosts: string[];
   ai: AiMatchInfo | null;
   durationMs: number;
 }
 
 export interface StateUpdate {
+  phase?: 'kickoff' | 'playing' | 'comeback_draft';
+  kickoffRemainingMs?: number;
   timeRemainingMs: number;
+  overtime?: boolean;
   mana: number;
   score: Score;
   entities: Entity[];
@@ -166,7 +171,10 @@ export interface GameState {
   tournament: TournamentInfo | null;
 
   // Live state (from state_update, 30x per second)
+  phase: 'kickoff' | 'playing' | 'comeback_draft';
+  kickoffRemainingMs: number;
   matchTimer: number; // milliseconds remaining
+  overtime: boolean;
   mana: number; // 0..MAX_MANA, fractional
   spawnCooldownRemainingMs: number; // 2s placement cooldown remaining
   touchdownBanner: boolean; // displays Touchdown celebration and kickoff reset
@@ -194,6 +202,7 @@ export interface GameState {
   setTournament: (info: TournamentInfo) => void;
   selectCard: (cardId: string) => void;
   applyStateUpdate: (update: StateUpdate) => void;
+  addSpellEffect: (spell: { cardId: string; x: number; y: number; radius: number; ownerId: string }) => void;
   setSpawnError: (message: string | null) => void;
   setGameOver: (info: GameOverInfo) => void;
   setMatchResults: (results: MatchResults) => void;
@@ -218,7 +227,10 @@ const initialMatchState = {
   boosts: [] as string[],
   ai: null as AiMatchInfo | null,
   tournament: null,
+  phase: 'playing' as 'kickoff' | 'playing' | 'comeback_draft',
+  kickoffRemainingMs: 0,
   matchTimer: 0,
+  overtime: false,
   mana: 0,
   spawnCooldownRemainingMs: 0,
   touchdownBanner: false,
@@ -256,7 +268,20 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
   setOnlineCount: (onlineCount, totalTesters = null) => set({ onlineCount, totalTesters }),
   setReconnectInSec: (reconnectInSec) => set({ reconnectInSec }),
   setQueued: (queueMode) => set({ ...initialMatchState, matchStatus: 'queued', queueMode }),
-  startMatch: ({ roomID, mode, roomPlayers, loadout, hand, nextCard, opponentPreview, silverDraftOptions, boosts, ai, durationMs }) =>
+  startMatch: ({
+    roomID,
+    mode,
+    roomPlayers,
+    loadout,
+    hand,
+    nextCard,
+    opponentPreview,
+    silverDraftOptions,
+    kickoffDurationMs,
+    boosts,
+    ai,
+    durationMs,
+  }) =>
     set({
       ...initialMatchState,
       matchStatus: 'in_match',
@@ -268,6 +293,8 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
       nextCard: nextCard ?? null,
       opponentPreview: opponentPreview ?? [],
       draftModal: silverDraftOptions?.length ? { active: true, type: 'silver_kickoff', options: silverDraftOptions } : null,
+      phase: silverDraftOptions?.length ? 'kickoff' : 'playing',
+      kickoffRemainingMs: silverDraftOptions?.length ? (kickoffDurationMs ?? 3000) : 0,
       boosts,
       ai,
       selectedCardId: hand[0]?.cardId ?? null,
@@ -283,22 +310,42 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
   setBoosts: (boosts) => set({ boosts }),
   setTournament: (tournament) => set({ tournament }),
   selectCard: (selectedCardId) => set({ selectedCardId }),
-  applyStateUpdate: ({ timeRemainingMs, mana, score, entities, killed, spawnCooldownRemainingMs = 0, roundReset = false }) =>
+  applyStateUpdate: ({
+    phase,
+    kickoffRemainingMs = 0,
+    timeRemainingMs,
+    overtime = false,
+    mana,
+    score,
+    entities,
+    killed,
+    spawnCooldownRemainingMs = 0,
+    roundReset = false,
+  }) =>
     set((s) => {
       const now = Date.now();
-      const fresh = deriveEffects(s.entities, entities, killed, now);
+      const fresh = roundReset ? [] : deriveEffects(s.entities, entities, killed, now);
       const scorer: 'you' | 'opponent' | null =
         score.you > s.score.you ? 'you' : score.opponent > s.score.opponent ? 'opponent' : s.lastTouchdownBy;
       return {
+        phase: phase ?? s.phase,
+        kickoffRemainingMs,
         matchTimer: timeRemainingMs,
+        overtime,
         mana,
         score,
         entities,
         spawnCooldownRemainingMs,
         touchdownBanner: roundReset ? true : s.touchdownBanner,
         lastTouchdownBy: roundReset ? scorer : s.lastTouchdownBy,
-        effects: updateEffects(s.effects, fresh, now),
+        effects: roundReset ? [] : updateEffects(s.effects, fresh, now),
       };
+    }),
+  addSpellEffect: (spell) =>
+    set((s) => {
+      const now = Date.now();
+      const effect: Effect = { id: newEffectId('spell'), at: now, kind: 'spell', ...spell };
+      return { effects: updateEffects(s.effects, [effect], now) };
     }),
   setSpawnError: (message) => set({ spawnError: message ? { message, at: Date.now() } : null }),
   setGameOver: (gameOver) =>
@@ -309,6 +356,9 @@ const gameStateCreator: StateCreator<GameState> = (set) => ({
       entities: [],
       effects: [],
       roomID: null,
+      draftModal: null,
+      spawnError: null,
+      kickoffRemainingMs: 0,
       touchdownBanner: false,
       lastTouchdownBy: null,
     }),

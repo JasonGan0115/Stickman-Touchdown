@@ -124,7 +124,7 @@ export function HomeScreen({ store, service, onSelectTab }: Props) {
           </View>
           <View style={styles.specItem}>
             <Text style={styles.specLabel}>COOLDOWN</Text>
-            <Text style={styles.specValue}>2.0s Global</Text>
+            <Text style={styles.specValue}>1.0s Global</Text>
           </View>
           <View style={styles.specItem}>
             <Text style={styles.specLabel}>AUGMENT</Text>

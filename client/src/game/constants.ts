@@ -9,7 +9,7 @@ export const ENDZONE_DEPTH = FIELD_HEIGHT * 0.15; // 96 units: each endzone is 1
 export const MAX_MANA = 10;
 export const STARTING_MANA = 3;
 export const RESET_MANA_ON_SCORE = 5;
-export const SPAWN_COOLDOWN_MS = 2000;
+export const SPAWN_COOLDOWN_MS = 1000;
 // Each card's mana cost comes from the server in 'match_found' (see HandCard)
 export const TICK_MS = 1000 / 30;
 

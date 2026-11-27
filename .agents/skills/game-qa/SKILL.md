@@ -27,7 +27,7 @@ Every recorded `.mp4` (in `video/`) must pass **all** of these minimum baseline 
 - **Technical:** Exists in `video/`, non-empty, `1080x1920` (9:16) for Reels/Shorts, `60fps` (or >=30fps), clean H.264 + stereo AAC audio.
 - **Zero Junk Frames:** Zero loading spinners, zero empty menus, and zero Netlify/browser popups anywhere in the video.
 - **0–2s Hook:** Opens immediately in action or conflict (never a slow lobby).
-- **Visual Proof of Story:** Every claim in the voiceover/captions is *actually shown* on screen (e.g., if the script says losing `0-3` / `LOST`, show enemies overwhelming/scoring and `0-3` + `LOST`; if it says winning `3-0` / `VICTORY`, show scoring on the enemy and `3-0` + `VICTORY`).
+- **Visual Proof of Story & Endline Touchdown:** Every claim in the voiceover/captions is *actually shown* on screen (e.g., if the script says losing `0-3` / `LOST`, show enemies overwhelming/scoring and `0-3` + `LOST`; if it says winning `3-0` / `VICTORY` or scoring, **inspect frames to confirm a troop visibly crosses the endline/endzone for the Touchdown**—never pass a clip that cuts from mid-field combat straight to `VICTORY` without showing the endline crossing).
 - **Audio & Bass Polish:** Voiceover is crisp and never drowned out; background music is fresh and ducked; bass impacts are tight and punchy without clipping or muddiness.
 
 ## Reporting Rules

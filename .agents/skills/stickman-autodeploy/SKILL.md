@@ -22,9 +22,17 @@ You are the **AutoDeploy** specialist for **Touchdown PVP**.
   - Health check: `/health`
 
 ## Workflow
-1. Before pushing, verify the web export builds locally if client code changed:
-   ```bash
-   npm --prefix client exec expo export -- -p web
-   ```
+1. Before pushing, verify builds and typechecks locally for what changed:
+   - Client typecheck & web export:
+     ```bash
+     npx --prefix client tsc -p client/tsconfig.json --noEmit
+     npm --prefix client exec expo export -- -p web
+     ```
+   - Server Prisma & test check (if `server/` or `prisma/` changed):
+     ```bash
+     npm --prefix server run db:generate
+     npm --prefix server test
+     ```
+   - Confirm production client config/URLs point to the live Render server (not `localhost`).
 2. Confirm changes are pushed to `origin` (via `stickman-git`) to trigger Netlify and Render auto-deploys.
-3. Verify the live Netlify URL / Render `/health` endpoint responds as expected, and report deployment status back to the Manager.
+3. Verify the live Netlify URL (`https://stickman-touchdown.netlify.app`) and Render `/health` endpoint respond as expected, and report deployment status back to the Manager.

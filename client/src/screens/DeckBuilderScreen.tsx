@@ -173,6 +173,11 @@ async function fetchCollection(): Promise<Collection> {
       { id: 'card_inferno_imp', name: 'Inferno Imp', type: 'Ranged', manaCost: 1 },
       { id: 'card_sky_dreadnought', name: 'Sky Dreadnought', type: 'Tank', manaCost: 6 },
       { id: 'card_touchdown_god', name: 'Touchdown God', type: 'Melee', manaCost: 6 },
+      { id: 'card_sticky_bomb', name: 'Sticky Bomb', type: 'Spell', manaCost: 3 },
+      { id: 'card_zap_shock', name: 'Zap Shock', type: 'Spell', manaCost: 2 },
+      { id: 'card_glue_freeze', name: 'Glue Freeze', type: 'Spell', manaCost: 3 },
+      { id: 'card_magnet_tower', name: 'Magnet Tower', type: 'Tower', manaCost: 3 },
+      { id: 'card_glue_cannon', name: 'Glue Cannon', type: 'Tower', manaCost: 4 },
     ],
     augments: [],
     loadout: {
@@ -397,7 +402,7 @@ export function DeckBuilderScreen({ onClose }: { onClose?: () => void }) {
   });
 
   return (
-    <View ref={rootRef} style={styles.root} onLayout={measureTargets}>
+    <View ref={rootRef} style={[styles.root, !onClose && styles.rootWithTabBar]} onLayout={measureTargets}>
       <View style={styles.header}>
         {onClose && (
           <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && styles.dimmed]}>
@@ -668,6 +673,7 @@ function Slot({
 
 const styles = StyleSheet.create({
   root: { flex: 1, alignSelf: 'stretch' },
+  rootWithTabBar: { paddingBottom: 76 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 8 },
   back: { paddingVertical: 6, paddingRight: 12 },
   backText: { color: '#8fb4ff', fontSize: 16, fontWeight: '700' },

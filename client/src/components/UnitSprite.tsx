@@ -14,6 +14,7 @@ import { useStore } from 'zustand';
 import { SPRITE_SIZE, TICK_MS } from '../game/constants';
 import type { Entity, GameStore, MovementType, UnitType } from '../store/useGameStore';
 import { Stickman } from './Stickman';
+import Svg, { Circle, Polygon, Rect } from 'react-native-svg';
 
 const HALF = SPRITE_SIZE / 2;
 
@@ -56,6 +57,7 @@ function LiveUnitBase({ store, id, scale, ...look }: Look & { store: GameStore; 
     });
   }, [store, id, scale, x, y]);
 
+  const cardId = first?.cardId ?? '';
   const type = useStore(store, (s) => findUnit(s.entities, id)?.type ?? first?.type ?? 'Melee');
   const movement = useStore(store, (s) => findUnit(s.entities, id)?.movement ?? first?.movement);
   const health = useStore(store, (s) => findUnit(s.entities, id)?.health ?? 0);
@@ -67,6 +69,7 @@ function LiveUnitBase({ store, id, scale, ...look }: Look & { store: GameStore; 
     <UnitBody
       x={x}
       y={y}
+      cardId={cardId}
       type={type}
       movement={movement}
       health={health}
@@ -89,6 +92,7 @@ function DyingUnitBase({ entity, scale, ...look }: Look & { entity: Entity; scal
       dying
       x={x}
       y={y}
+      cardId={entity.cardId}
       type={entity.type}
       movement={entity.movement}
       health={0}
@@ -105,7 +109,8 @@ export const DyingUnit = memo(DyingUnitBase);
 interface BodyProps extends Look {
   x: SharedValue<number>; // top-left, px on the (unrotated) board
   y: SharedValue<number>;
-  type: UnitType;
+  cardId: string;
+  type: UnitType | 'Tower';
   movement?: MovementType;
   health: number;
   maxHealth: number;
@@ -114,9 +119,34 @@ interface BodyProps extends Look {
   dying?: boolean;
 }
 
+const TowerSilhouette = memo(function TowerSilhouette({ cardId, color, size }: { cardId: string; color: string; size: number }) {
+  const isMagnet = cardId === 'card_magnet_tower';
+  return (
+    <Svg width={size} height={size} viewBox="0 0 100 100">
+      {/* Stone/metal base */}
+      <Rect x={24} y={66} width={52} height={22} rx={5} fill="#2b303d" stroke={color} strokeWidth={4} />
+      {/* Tower pillar */}
+      <Polygon points="34,66 40,28 60,28 66,66" fill="#434b5e" stroke="#d3d1c7" strokeWidth={3} />
+      {/* Turret top */}
+      {isMagnet ? (
+        <>
+          <Circle cx={50} cy={24} r={13} fill={color} stroke="#f4f6fb" strokeWidth={3} />
+          <Circle cx={50} cy={24} r={5} fill="#fde047" />
+        </>
+      ) : (
+        <>
+          <Rect x={34} y={16} width={32} height={16} rx={4} fill={color} stroke="#f4f6fb" strokeWidth={3} />
+          <Rect x={46} y={6} width={8} height={14} rx={2} fill="#38bdf8" />
+        </>
+      )}
+    </Svg>
+  );
+});
+
 const UnitBody = memo(function UnitBody({
   x,
   y,
+  cardId,
   type,
   movement,
   health,
@@ -173,14 +203,18 @@ const UnitBody = memo(function UnitBody({
         {attacking && !dying && <View style={styles.attackRing} />}
         <Animated.View style={[styles.fill, figure]}>
           <View style={[styles.fill, !mine && styles.mirrored]}>
-            <Stickman
-              type={type}
-              movement={movement}
-              teamColor={color}
-              size={SPRITE_SIZE}
-              walking={!attacking && !dying}
-              attackTick={dying ? -1 : lastHitTick}
-            />
+            {type === 'Tower' ? (
+              <TowerSilhouette cardId={cardId} color={color} size={SPRITE_SIZE} />
+            ) : (
+              <Stickman
+                type={type}
+                movement={movement}
+                teamColor={color}
+                size={SPRITE_SIZE}
+                walking={!attacking && !dying}
+                attackTick={dying ? -1 : lastHitTick}
+              />
+            )}
           </View>
         </Animated.View>
       </View>

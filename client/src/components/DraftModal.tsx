@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useStore } from 'zustand';
 
@@ -21,13 +21,21 @@ interface Props {
 export const DraftModal = memo(function DraftModal({ store, service }: Props) {
   const draftModal = useStore(store, (s) => s.draftModal);
   const opponentPreview = useStore(store, (s) => s.opponentPreview);
+  const kickoffRemainingMs = useStore(store, (s) => s.kickoffRemainingMs);
+  const pickedRef = useRef(false);
 
-  if (!draftModal || !draftModal.active) return null;
+  if (!draftModal || !draftModal.active) {
+    pickedRef.current = false;
+    return null;
+  }
 
   const isKickoff = draftModal.type === 'silver_kickoff';
   const isComeback = draftModal.type === 'comeback';
+  const kickoffSec = Math.max(1, Math.ceil(kickoffRemainingMs / 1000));
 
   const onSelect = (aug: AugmentDraftOption) => {
+    if (pickedRef.current) return;
+    pickedRef.current = true;
     soundService.playDraftPick();
     service.pickDraft(aug.id, isComeback);
   };
@@ -46,7 +54,21 @@ export const DraftModal = memo(function DraftModal({ store, service }: Props) {
                   <View style={styles.previewCost}>
                     <Text style={styles.previewCostText}>{card.cost}</Text>
                   </View>
-                  <Stickman type={card.type} movement={card.movement} teamColor="#e0262b" size={26} animated={false} />
+                  {card.type === 'Spell' || card.type === 'Tower' ? (
+                    <Text style={{ fontSize: 20, lineHeight: 26 }}>
+                      {card.type === 'Spell'
+                        ? card.cardId === 'card_zap_shock'
+                          ? '⚡'
+                          : card.cardId === 'card_glue_freeze'
+                            ? '❄️'
+                            : '💣'
+                        : card.cardId === 'card_magnet_tower'
+                          ? '🧲'
+                          : '🗼'}
+                    </Text>
+                  ) : (
+                    <Stickman type={card.type} movement={card.movement} teamColor="#e0262b" size={26} animated={false} />
+                  )}
                   <Text style={styles.previewCardName} numberOfLines={1}>
                     {card.name}
                   </Text>
@@ -59,12 +81,17 @@ export const DraftModal = memo(function DraftModal({ store, service }: Props) {
 
         {/* Draft Choices Section */}
         <View style={styles.draftSection}>
+          {isKickoff && kickoffRemainingMs > 0 && (
+            <View style={styles.countdownPill}>
+              <Text style={styles.countdownText}>⏱ KICKOFF IN {kickoffSec}s</Text>
+            </View>
+          )}
           <Text style={[styles.draftTitle, isComeback && styles.comebackTitle]}>
             {isKickoff ? '⚡ CHOOSE KICKOFF AUGMENT' : '🔥 COMEBACK DRAFT: CHOOSE UPGRADE'}
           </Text>
           <Text style={styles.draftSub}>
             {isKickoff
-              ? 'Select 1 Silver augment to empower your sticky troops:'
+              ? 'Select 1 Silver augment before troop deployment begins:'
               : 'Opponent scored! Pick 1 Gold or Legendary augment to turn the tide:'}
           </Text>
 
@@ -75,7 +102,7 @@ export const DraftModal = memo(function DraftModal({ store, service }: Props) {
                 <Pressable
                   key={aug.id}
                   style={({ pressed }) => [styles.augCard, { borderColor: border }, pressed && styles.pressed]}
-                  onPress={() => onSelect(aug)}
+                  onPressIn={() => onSelect(aug)}
                 >
                   <View style={[styles.rarityBadge, { backgroundColor: border }]}>
                     <Text style={styles.rarityBadgeText}>
@@ -188,6 +215,21 @@ const styles = StyleSheet.create({
 
   draftSection: {
     gap: 8,
+  },
+  countdownPill: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(56, 189, 248, 0.16)',
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 3,
+  },
+  countdownText: {
+    color: '#38bdf8',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
   },
   draftTitle: {
     color: '#fff',

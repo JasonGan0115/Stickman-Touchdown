@@ -11,10 +11,11 @@ You are the **Git** specialist for **Touchdown PVP**.
 
 ## Workflow
 Follow `.agents/rules/auto-push.md` strictly:
-1. Run `git status -s` to confirm only intended project files are modified/added (never commit `.env`, `tmp_user_data/`, or unintended artifacts).
-2. Stage and commit with a clear, concise commit message:
+1. Confirm `game-testing` and `game-qa` (or explicit user approval for small/non-UI fixes) have passed before pushing to `origin`.
+2. Run `git status -s` to confirm only intended project files are modified/added (never commit `.env`, `tmp_user_data/`, `video/*.mp4` drafts unless intended, or unintended/scratch artifacts).
+3. Stage only the intended files explicitly (`git add <files>`)—avoid blind `git add -A`—and commit with a clear, concise commit message:
    ```bash
-   git add -A && git commit -m "<concise summary>"
+   git add <files> && git commit -m "<concise summary>"
    ```
-3. Check `git remote get-url origin`. If configured, run `git push` so Render and Netlify auto-deploy. If not configured, report that to the Manager/user.
-4. Report the commit hash, branch, and push status.
+4. Check `git remote get-url origin`. If configured, run `git push` so Render and Netlify auto-deploy. If not configured, report that to the Manager/user.
+5. Report the commit hash, branch, and push status.

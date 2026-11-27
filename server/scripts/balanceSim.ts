@@ -1,7 +1,7 @@
 import { botTick, createBot, seededRng, type Rng } from "../src/game/bot";
 import { LOADOUT_UNIT_SLOTS, MATCH_DURATION_MS, TICK_MS } from "../src/game/constants";
 import { createMatch, getScoreLimitWinner, stepMatch } from "../src/game/match";
-import { UNIT_STATS } from "../src/game/units";
+import { getCardStats, UNIT_STATS } from "../src/game/units";
 
 interface CardStats {
   cardId: string;
@@ -29,7 +29,7 @@ function runSimulation(matchCount: number): void {
   const allIds = Object.keys(UNIT_STATS);
   const stats = new Map<string, CardStats>(
     allIds.map((id) => {
-      const u = UNIT_STATS[id];
+      const u = getCardStats(id)!;
       return [
         id,
         {

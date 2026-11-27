@@ -10,24 +10,25 @@ Expo ships breaking changes every SDK release. APIs you remember are likely rena
 
 ## Commands
 
-Use `bunx` instead of `npx` if the project uses bun (`bun.lock` present).
+This project uses `npm` (`package-lock.json`).
 
 ```bash
-npx expo install <package>  # ALWAYS use instead of npm/yarn/pnpm/bun add — resolves SDK-compatible versions
+npx expo install <package>  # ALWAYS use instead of npm install — resolves SDK-compatible versions
 npx expo start              # start the dev server
-npx expo lint               # lint
+npm run lint                # expo lint
 npx tsc --noEmit            # typecheck
 npx expo-doctor             # diagnose dependency and config issues
 npx expo install --fix      # fix incompatible package versions
 ```
 
-Run lint and typecheck before declaring any task done.
+Run `npm run lint` and `npx tsc --noEmit` before declaring any task done.
 
-## Navigation & Routing
+## Architecture & Navigation
 
-- Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.
-- Import `Link`, `router`, and `useLocalSearchParams` from `expo-router`.
-- Docs: https://docs.expo.dev/router/introduction.md
+- Entry point is `App.tsx` (state-driven screen switching via Zustand, **not** Expo Router `src/app/`).
+- Screens live in `src/screens/` (`HomeScreen.tsx`, `ArenaScreen.tsx`, `DeckBuilderScreen.tsx`, `PostMatchScreen.tsx`, `TournamentScreen.tsx`).
+- UI components live in `src/components/` (`DraftModal.tsx`, `EffectsLayer.tsx`, `MatchPanel.tsx`, `Stickman.tsx`, `UnitSprite.tsx`).
+- State, services, and game constants live in `src/store/useGameStore.ts`, `src/services/`, and `src/game/`.
 
 ## Building with EAS
 

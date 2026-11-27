@@ -76,7 +76,7 @@ export function TournamentScreen({ store, service, onEnterQueue }: Props) {
           <Text style={styles.ruleIcon}>🏈</Text>
           <View style={styles.ruleTextWrap}>
             <Text style={styles.ruleTitle}>First to 3 Touchdowns</Text>
-            <Text style={styles.ruleDesc}>2-second placement cooldown, 1 liquid/sec regen, 5 liquid pitch reset after each score.</Text>
+            <Text style={styles.ruleDesc}>1-second placement cooldown, 1 liquid/sec regen, 5 liquid pitch reset after each score.</Text>
           </View>
         </View>
       </View>

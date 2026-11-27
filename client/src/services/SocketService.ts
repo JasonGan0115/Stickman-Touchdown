@@ -46,6 +46,8 @@ function spawnRejectionText(reason: string, cost?: number): string {
       return 'Placement cooldown active (2s)';
     case 'outside_home_endzone':
       return 'Server: outside your endzone';
+    case 'outside_defensive_zone':
+      return 'Place towers inside your defensive zone';
     case 'invalid_coordinates':
       return 'Invalid spawn position';
     case 'unknown_card':
@@ -53,6 +55,10 @@ function spawnRejectionText(reason: string, cost?: number): string {
       return "That card isn't in your hand";
     case 'not_in_match':
       return 'Match is not running';
+    case 'kickoff_active':
+      return 'Choose kickoff augment first';
+    case 'draft_active':
+      return 'Waiting for augment draft';
     default:
       return 'Spawn rejected';
   }
@@ -67,6 +73,7 @@ interface MatchFoundPayload {
   nextCard?: HandCard | null;
   opponentPreview?: HandCard[];
   silverDraftOptions?: AugmentDraftOption[];
+  kickoffDurationMs?: number;
   boosts: string[];
   ai?: AiMatchInfo | null;
   durationMs: number;
@@ -75,7 +82,10 @@ interface MatchFoundPayload {
 interface StateUpdatePayload {
   matchId: string;
   tick: number;
+  phase?: 'kickoff' | 'playing' | 'comeback_draft';
+  kickoffRemainingMs?: number;
   timeRemainingMs: number;
+  overtime?: boolean;
   mana: number;
   score: Score;
   entities: Entity[];
@@ -192,6 +202,7 @@ export class SocketService {
         nextCard: d.nextCard ?? null,
         opponentPreview: d.opponentPreview ?? [],
         silverDraftOptions: d.silverDraftOptions ?? [],
+        kickoffDurationMs: d.kickoffDurationMs,
         boosts: d.boosts ?? [],
         ai: d.ai ?? null,
         durationMs: d.durationMs,
@@ -202,7 +213,8 @@ export class SocketService {
       state().setDraftModal(null);
     });
     socket.on('comeback_draft', ({ options }: { options: AugmentDraftOption[] }) => {
-      state().setDraftModal({ active: true, type: 'comeback', options: options ?? [] });
+      if (state().matchStatus !== 'in_match' || !options?.length) return;
+      state().setDraftModal({ active: true, type: 'comeback', options });
     });
     socket.on('hand_update', ({ hand, nextCard }: { hand: HandCard[]; nextCard: HandCard | null }) => {
       state().setHandUpdate(hand ?? [], nextCard ?? null);
@@ -215,7 +227,10 @@ export class SocketService {
       // Ignore stray ticks from a match we're no longer in
       if (d.matchId === state().roomID) {
         state().applyStateUpdate({
+          phase: d.phase,
+          kickoffRemainingMs: d.kickoffRemainingMs,
           timeRemainingMs: d.timeRemainingMs,
+          overtime: d.overtime,
           mana: d.mana,
           score: d.score,
           entities: d.entities,
@@ -225,6 +240,13 @@ export class SocketService {
         });
       }
     });
+
+    socket.on(
+      'spell_cast',
+      (spell: { cardId: string; x: number; y: number; radius: number; ownerId: string }) => {
+        state().addSpellEffect(spell);
+      },
+    );
 
     socket.on('spawn_rejected', ({ reason, cost }: { reason: string; cost?: number }) =>
       state().setSpawnError(spawnRejectionText(reason, cost)),
@@ -267,7 +289,7 @@ export class SocketService {
   /** Picks an in-match augment (Silver kickoff draft or Comeback draft). */
   pickDraft(augmentId: string, isComeback = false): void {
     this.socket?.emit(isComeback ? 'comeback_pick' : 'draft_pick', { augmentId });
-    this.store.getState().setDraftModal(null);
+    this.store.setState({ draftModal: null, touchdownBanner: false });
   }
 
   /** DEBUG: ends the current match as a Player 1 win (server ignores this in production). */

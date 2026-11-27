@@ -38,6 +38,8 @@ export function EffectsLayer({ store, scale, flipped, colorFor, localSocketId }:
             return <Projectile key={e.id} effect={e} scale={scale} color={colorFor(e.ownerId)} />;
           case 'damage':
             return <DamageNumber key={e.id} effect={e} scale={scale} flipped={flipped} />;
+          case 'spell':
+            return <SpellRing key={e.id} effect={e} scale={scale} />;
         }
       })}
     </View>
@@ -125,6 +127,44 @@ const DamageNumber = memo(function DamageNumber({ effect, scale, flipped }: { ef
   );
 });
 
+type SpellEffect = Extract<Effect, { kind: 'spell' }>;
+
+const SPELL_COLORS: Record<string, { border: string; fill: string }> = {
+  card_sticky_bomb: { border: '#ff5722', fill: 'rgba(255, 87, 34, 0.28)' },
+  card_zap_shock: { border: '#fde047', fill: 'rgba(253, 224, 71, 0.28)' },
+  card_glue_freeze: { border: '#38bdf8', fill: 'rgba(56, 189, 248, 0.28)' },
+};
+
+const SpellRing = memo(function SpellRing({ effect, scale }: { effect: SpellEffect; scale: number }) {
+  const [t] = useState(() => new Animated.Value(0));
+  useEffect(() => {
+    Animated.timing(t, { toValue: 1, duration: 520, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+  }, [t]);
+
+  const size = effect.radius * 2 * scale;
+  const palette = SPELL_COLORS[effect.cardId] ?? { border: '#ffffff', fill: 'rgba(255,255,255,0.22)' };
+  const ringScale = t.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1.05] });
+  const opacity = t.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0.95, 0.85, 0] });
+
+  return (
+    <Animated.View
+      style={[
+        styles.spellRing,
+        {
+          width: size,
+          height: size,
+          left: effect.x * scale - size / 2,
+          top: effect.y * scale - size / 2,
+          borderColor: palette.border,
+          backgroundColor: palette.fill,
+          opacity,
+          transform: [{ scale: ringScale }],
+        },
+      ]}
+    />
+  );
+});
+
 const styles = StyleSheet.create({
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' },
   upright: { transform: [{ rotate: '180deg' }] },
@@ -141,6 +181,7 @@ const styles = StyleSheet.create({
   },
   orb: { position: 'absolute', left: -5, top: -5, width: 10, height: 10, borderRadius: 5, backgroundColor: '#afa9ec', borderWidth: 2, borderColor: '#eeedfe' },
   splash: { position: 'absolute', borderRadius: 999, borderWidth: 3 },
+  spellRing: { position: 'absolute', borderRadius: 999, borderWidth: 3 },
   damageAnchor: { position: 'absolute', width: 40, height: 20, alignItems: 'center' },
   damage: { color: '#ffd84d', fontSize: 13, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 2, textShadowOffset: { width: 0, height: 1 } },
 });

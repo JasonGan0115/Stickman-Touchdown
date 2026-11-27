@@ -3,7 +3,7 @@ import { AUGMENTS, describeAugment, getAugment } from "./game/augments";
 import { LOADOUT_AUGMENT_SLOTS, LOADOUT_UNIT_SLOTS } from "./game/constants";
 import type { Loadout } from "./game/match";
 import { getTroopLevelProgress } from "./game/troopLevels";
-import { getUnitStats, UNIT_STATS } from "./game/units";
+import { getCardStats, getUnitStats, SPELL_STATS, TOWER_STATS, UNIT_STATS } from "./game/units";
 
 // There is no login yet: clients identify themselves by username, which the
 // server trusts. Replace with real authentication before launch.
@@ -24,12 +24,16 @@ export async function ensurePlayer(username: string) {
   const player = await prisma.player.upsert({ where: { username }, update: {}, create: { username } });
 
   if (TESTING_UNLOCK_ALL) {
-    const allUnits = Object.values(UNIT_STATS);
+    const allCards = [
+      ...Object.values(UNIT_STATS),
+      ...Object.values(SPELL_STATS),
+      ...Object.values(TOWER_STATS),
+    ];
     const existingCount = await prisma.card.count();
-    if (existingCount < allUnits.length) {
-      for (const u of allUnits) {
-        const row = { id: u.cardId, name: u.name, type: u.type, manaCost: u.cost };
-        await prisma.card.upsert({ where: { id: u.cardId }, update: row, create: row });
+    if (existingCount < allCards.length) {
+      for (const c of allCards) {
+        const row = { id: c.cardId, name: c.name, type: c.type, manaCost: c.cost };
+        await prisma.card.upsert({ where: { id: c.cardId }, update: row, create: row });
       }
     }
     const cards = await prisma.card.findMany({ select: { id: true } });
@@ -108,9 +112,12 @@ export async function getCollection(username: string) {
     username: player.username,
     cards: cards.map(({ card, xp }) => {
       const progress = getTroopLevelProgress(xp);
+      const stats = getCardStats(card.id);
+      const unitStats = getUnitStats(card.id);
       return {
         ...card,
-        movement: getUnitStats(card.id)?.movement ?? "walking",
+        type: stats?.type ?? card.type,
+        movement: unitStats?.movement ?? (stats?.type === "Spell" ? "spell" : stats?.type === "Tower" ? "tower" : "walking"),
         xp: progress.xp,
         level: progress.level,
         xpIntoLevel: progress.xpIntoLevel,

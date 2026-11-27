@@ -45,20 +45,21 @@ export function getAIBonus(difficulty: number): AIBonus {
   if (d < 50) {
     const t = (d - 10) / 40; // 0..1 across 10->50
     return {
-      startingLiquid: STARTING_MANA + Math.floor(t * 2), // 3 -> 5
-      manaRegenMultiplier: Number((1 + t * 0.35).toFixed(4)), // 1.00 -> 1.35
-      cooldownFactor: Number((1 - t * 0.22).toFixed(4)), // 1.00 -> 0.78
-      predictionChance: Number((t * 0.45).toFixed(4)), // 0.00 -> 0.45
-      damageDebuff: Number((t * 0.2).toFixed(4)), // 0.00 -> 0.20
+      startingLiquid: STARTING_MANA + Math.floor(t * 1.5), // 3 -> 4
+      manaRegenMultiplier: Number((1 + t * 0.06).toFixed(4)), // 1.00 -> 1.06
+      cooldownFactor: Number((1 - t * 0.1).toFixed(4)), // 1.00 -> 0.90
+      predictionChance: Number((t * 0.25).toFixed(4)), // 0.00 -> 0.25
+      damageDebuff: Number((t * 0.04).toFixed(4)), // 0.00 -> 0.04
     };
   }
 
   const u = (d - 50) / 50; // 0..1 across 50->100
+  const s = Math.pow(u, 1.4); // smooth continuation past Lv.50 without an immediate cliff
   return {
-    startingLiquid: 5 + Math.floor(u * 5), // 5 -> 10
-    manaRegenMultiplier: Number((1.35 + u * 0.65).toFixed(4)), // 1.35 -> 2.00
-    cooldownFactor: Number((0.78 - u * 0.28).toFixed(4)), // 0.78 -> 0.50
-    predictionChance: Number((0.45 + u * 0.45).toFixed(4)), // 0.45 -> 0.90
-    damageDebuff: Number((0.2 + u * 0.25).toFixed(4)), // 0.20 -> 0.45
+    startingLiquid: 4 + Math.floor(u * 3), // 4 -> 7
+    manaRegenMultiplier: Number((1.06 + s * 0.18).toFixed(4)), // 1.06 -> 1.24
+    cooldownFactor: Number((0.9 - u * 0.22).toFixed(4)), // 0.90 -> 0.68
+    predictionChance: Number((0.25 + u * 0.5).toFixed(4)), // 0.25 -> 0.75
+    damageDebuff: Number((0.04 + s * 0.16).toFixed(4)), // 0.04 -> 0.20
   };
 }

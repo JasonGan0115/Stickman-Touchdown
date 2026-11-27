@@ -5,6 +5,7 @@ import { ACTIVE_HAND_SIZE, LOADOUT_UNIT_SLOTS, TICK_RATE } from "./constants";
 // says which cards a player owns; the numbers that decide a fight live here.
 
 export type UnitType = "Melee" | "Ranged" | "Tank" | "Caster";
+export type CardType = UnitType | "Spell" | "Tower";
 export type MovementType = "walking" | "running" | "sliding" | "flying";
 
 export interface UnitStats {
@@ -19,6 +20,34 @@ export interface UnitStats {
   attackIntervalTicks: number; // ticks between hits
   speed: number; // world units per tick
   splashRadius: number; // 0 = single target; otherwise also hits enemies this close to the target
+}
+
+export interface SpellStats {
+  cardId: string;
+  name: string;
+  type: "Spell";
+  cost: number;
+  radius: number;
+  damage: number;
+  slowFactor?: number;
+  slowDurationTicks?: number;
+  stunDurationTicks?: number;
+}
+
+export interface TowerStats {
+  cardId: string;
+  name: string;
+  type: "Tower";
+  cost: number;
+  health: number;
+  lifetimeTicks: number;
+  attackRange: number;
+  damage: number;
+  attackIntervalTicks: number;
+  splashRadius: number;
+  tauntRadius?: number;
+  slowFactor?: number;
+  slowDurationTicks?: number;
 }
 
 const GLOBAL_SPEED_MULTIPLIER = 0.38; // global tuning: slower tactical movement across all troops
@@ -886,6 +915,66 @@ export const UNIT_STATS: Record<string, UnitStats> = {
   },
 };
 
+export const SPELL_STATS: Record<string, SpellStats> = {
+  card_sticky_bomb: {
+    cardId: "card_sticky_bomb",
+    name: "Sticky Bomb",
+    type: "Spell",
+    cost: 3,
+    radius: 75,
+    damage: 55,
+  },
+  card_zap_shock: {
+    cardId: "card_zap_shock",
+    name: "Zap Shock",
+    type: "Spell",
+    cost: 2,
+    radius: 65,
+    damage: 25,
+    stunDurationTicks: ticks(1.2),
+  },
+  card_glue_freeze: {
+    cardId: "card_glue_freeze",
+    name: "Glue Freeze",
+    type: "Spell",
+    cost: 3,
+    radius: 85,
+    damage: 12,
+    slowFactor: 0.4,
+    slowDurationTicks: ticks(3.0),
+  },
+};
+
+export const TOWER_STATS: Record<string, TowerStats> = {
+  card_magnet_tower: {
+    cardId: "card_magnet_tower",
+    name: "Magnet Tower",
+    type: "Tower",
+    cost: 3,
+    health: 320,
+    lifetimeTicks: 600, // 20s
+    attackRange: 135,
+    damage: 6,
+    attackIntervalTicks: 36, // 1.2s
+    splashRadius: 0,
+    tauntRadius: 135,
+  },
+  card_glue_cannon: {
+    cardId: "card_glue_cannon",
+    name: "Glue Cannon",
+    type: "Tower",
+    cost: 4,
+    health: 260,
+    lifetimeTicks: 600, // 20s
+    attackRange: 150,
+    damage: 16,
+    attackIntervalTicks: 33, // 1.1s
+    splashRadius: 35,
+    slowFactor: 0.7,
+    slowDurationTicks: ticks(1.5),
+  },
+};
+
 /** Every new player owns these 8 cards, serving as the complete starter deck. */
 export const DEFAULT_HAND = Object.keys(UNIT_STATS).slice(0, LOADOUT_UNIT_SLOTS);
 
@@ -893,12 +982,32 @@ export function getUnitStats(cardId: unknown): UnitStats | undefined {
   return typeof cardId === "string" && Object.hasOwn(UNIT_STATS, cardId) ? UNIT_STATS[cardId] : undefined;
 }
 
+export function getSpellStats(cardId: unknown): SpellStats | undefined {
+  return typeof cardId === "string" && Object.hasOwn(SPELL_STATS, cardId) ? SPELL_STATS[cardId] : undefined;
+}
+
+export function getTowerStats(cardId: unknown): TowerStats | undefined {
+  return typeof cardId === "string" && Object.hasOwn(TOWER_STATS, cardId) ? TOWER_STATS[cardId] : undefined;
+}
+
+export function isSpellCard(cardId: unknown): boolean {
+  return getSpellStats(cardId) !== undefined;
+}
+
+export function isTowerCard(cardId: unknown): boolean {
+  return getTowerStats(cardId) !== undefined;
+}
+
+export function getCardStats(cardId: unknown): UnitStats | SpellStats | TowerStats | undefined {
+  return getUnitStats(cardId) ?? getSpellStats(cardId) ?? getTowerStats(cardId);
+}
+
 /**
- * Resolves the full deck of up to 8 troops.
+ * Resolves the full deck of up to 8 cards (troops + spells).
  * An empty result falls back to DEFAULT_HAND.
  */
 export function resolveDeck(unitIds: string[]): string[] {
-  const deck = [...new Set(unitIds)].filter((id) => getUnitStats(id)).slice(0, LOADOUT_UNIT_SLOTS);
+  const deck = [...new Set(unitIds)].filter((id) => getCardStats(id)).slice(0, LOADOUT_UNIT_SLOTS);
   return deck.length ? deck : [...DEFAULT_HAND];
 }
 
@@ -927,6 +1036,14 @@ export function sampleRandomCards(deck: string[], count = 4, rng: () => number =
 
 /** What the client needs to draw a card in the hand. */
 export function handCardInfo(cardId: string) {
+  const spell = getSpellStats(cardId);
+  if (spell) {
+    return { cardId: spell.cardId, name: spell.name, type: spell.type, cost: spell.cost };
+  }
+  const tower = getTowerStats(cardId);
+  if (tower) {
+    return { cardId: tower.cardId, name: tower.name, type: tower.type, cost: tower.cost };
+  }
   const s = UNIT_STATS[cardId];
   return { cardId: s.cardId, name: s.name, type: s.type, movement: s.movement, cost: s.cost };
 }

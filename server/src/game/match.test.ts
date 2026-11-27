@@ -2,10 +2,27 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { AUGMENTS, combineAugments, describeModifiers, getDraftOptions, NO_MODIFIERS } from "./augments";
-import { AUGMENT_DURATION_MS, FIELD_HEIGHT, MAX_MANA, TICK_RATE, WINNING_SCORE } from "./constants";
-import { addUnit, applyAugment, createMatch, getScoreLimitWinner, stepMatch, trySpawn, type Match } from "./match";
+import {
+  AUGMENT_DURATION_MS,
+  ENDZONE_DEPTH,
+  FIELD_HEIGHT,
+  MAX_MANA,
+  OVERTIME_MANA_MULTIPLIER,
+  TICK_RATE,
+  WINNING_SCORE,
+} from "./constants";
+import {
+  addUnit,
+  applyAugment,
+  createMatch,
+  getScoreLimitWinner,
+  isInDefensiveZone,
+  stepMatch,
+  trySpawn,
+  type Match,
+} from "./match";
 import { pruneLoadout } from "../players";
-import { DEFAULT_HAND, sampleRandomCards, UNIT_STATS } from "./units";
+import { DEFAULT_HAND, sampleRandomCards, TOWER_STATS, UNIT_STATS } from "./units";
 
 const FOOT = UNIT_STATS.card_footsoldier;
 const ARCHER = UNIT_STATS.card_archer;
@@ -215,9 +232,23 @@ describe("stepMatch", () => {
     p1.score = WINNING_SCORE - 1;
     assert.equal(getScoreLimitWinner(match), undefined);
     addUnit(match, p1, FOOT, 180, 96 + FOOT.speed);
-    stepMatch(match);
+    const events = stepMatch(match);
     assert.equal(p1.score, WINNING_SCORE);
+    assert.equal(events.roundReset, false);
+    assert.equal(match.entities.length, 0, "field cleared on winning touchdown");
     assert.equal(getScoreLimitWinner(match)?.id, p1.id);
+  });
+
+  test("only 1 point is awarded per round even if multiple units cross the endzone on the same tick", () => {
+    const match = newMatch();
+    const [p1] = match.players;
+    addUnit(match, p1, FOOT, 120, 96 + FOOT.speed);
+    addUnit(match, p1, FOOT, 240, 96 + FOOT.speed);
+    const events = stepMatch(match);
+    assert.equal(p1.score, 1);
+    assert.equal(events.scored.length, 1);
+    assert.equal(events.roundReset, true);
+    assert.equal(match.entities.length, 0);
   });
 });
 
@@ -340,5 +371,115 @@ describe("draft and scouting", () => {
     );
     assert.deepEqual(pruned.unitIds, ["card_footsoldier"]);
     assert.deepEqual(pruned.augmentIds, ["aug_iron_skin"]);
+  });
+});
+
+describe("tactical spells", () => {
+  test("spells can be cast anywhere on the field and never score", () => {
+    const match = newMatch(["card_sticky_bomb", "card_zap_shock", "card_glue_freeze", "card_footsoldier"]);
+    const [p1] = match.players;
+    p1.mana = 10;
+
+    // Cast Sticky Bomb directly inside opponent's endzone (y = 20)
+    const res = trySpawn(match, p1, "card_sticky_bomb", 180, 20);
+    assert.equal(res.ok, true);
+    if (res.ok) assert.equal(res.isSpell, true);
+    assert.equal(match.entities.length, 0, "spells do not spawn Entity units");
+    const events = stepMatch(match);
+    assert.equal(events.scored.length, 0);
+    assert.equal(p1.score, 0);
+  });
+
+  test("zap shock stuns enemies and glue freeze slows + clamps y outside endzones", () => {
+    const match = newMatch(["card_zap_shock", "card_glue_freeze", "card_footsoldier", "card_archer"]);
+    const [p1, p2] = match.players;
+    p1.mana = 10;
+
+    const enemy = addUnit(match, p2, FOOT, 180, ENDZONE_DEPTH + 2);
+    const startY = enemy.y;
+    const zap = trySpawn(match, p1, "card_zap_shock", 180, startY);
+    assert.equal(zap.ok, true);
+    stepMatch(match);
+    assert.equal(enemy.y, startY, "stunned unit does not move");
+
+    // Advance past stun duration, then cast Glue Freeze near top endzone (within 85px radius)
+    match.tick += TICK_RATE * 2;
+    p1.spawnCooldownTicks = 0;
+    const freeze = trySpawn(match, p1, "card_glue_freeze", 180, 20);
+    assert.equal(freeze.ok, true);
+    assert.ok(enemy.y >= ENDZONE_DEPTH + 1, "pull is clamped outside P2 endzone");
+    const yBeforeSlowStep = enemy.y;
+    stepMatch(match);
+    const moved = enemy.y - yBeforeSlowStep;
+    assert.ok(moved > 0 && moved < FOOT.speed, "slowed unit moves slower than normal speed");
+  });
+});
+
+describe("deployable defensive towers", () => {
+  test("towers require defensive quarter-zone placement", () => {
+    const match = newMatch(["card_magnet_tower", "card_glue_cannon", "card_footsoldier", "card_archer"]);
+    const [p1] = match.players;
+    p1.mana = 10;
+
+    assert.equal(isInDefensiveZone(1, FIELD_HEIGHT * 0.5), false);
+    assert.equal(isInDefensiveZone(1, FIELD_HEIGHT * 0.72), true);
+
+    const bad = trySpawn(match, p1, "card_magnet_tower", 180, FIELD_HEIGHT * 0.5);
+    assert.deepEqual(bad, { ok: false, reason: "outside_defensive_zone" });
+
+    const good = trySpawn(match, p1, "card_magnet_tower", 180, FIELD_HEIGHT * 0.72);
+    assert.equal(good.ok, true);
+  });
+
+  test("towers never move, never score, decay HP each tick, and clear on roundReset", () => {
+    const match = newMatch(["card_magnet_tower", "card_footsoldier", "card_archer", "card_shield_bearer"]);
+    const [p1, p2] = match.players;
+    p1.mana = 10;
+
+    const res = trySpawn(match, p1, "card_magnet_tower", 180, FIELD_HEIGHT * 0.72);
+    assert.equal(res.ok, true);
+    assert.ok(res.ok && !res.isSpell);
+    if (!res.ok || res.isSpell) return;
+    const tower = res.entity;
+    const startY = tower.y;
+    const startHp = tower.health;
+
+    stepMatch(match);
+    assert.equal(tower.y, startY, "tower does not move");
+    assert.equal(p1.score, 0, "tower never scores");
+    assert.ok(
+      Math.abs(tower.health - (startHp - TOWER_STATS.card_magnet_tower.health / TOWER_STATS.card_magnet_tower.lifetimeTicks)) < 1e-6,
+      "tower decays HP each tick",
+    );
+
+    // Opponent scores on the far side (outside Magnet Tower's 135px taunt radius) -> roundReset clears tower
+    addUnit(match, p2, FOOT, 20, FIELD_HEIGHT - ENDZONE_DEPTH - FOOT.speed);
+    const events = stepMatch(match);
+    assert.equal(events.roundReset, true);
+    assert.equal(match.entities.length, 0, "tower cleared on touchdown roundReset");
+  });
+});
+
+describe("sudden-death overtime", () => {
+  test("overtime boosts mana regen and next touchdown wins immediately without roundReset", () => {
+    const match = newMatch();
+    const [p1, p2] = match.players;
+    p1.score = 1;
+    p2.score = 1;
+    match.overtime = true;
+
+    // Still tied -> no winner yet (draw if clock expires)
+    assert.equal(getScoreLimitWinner(match), undefined);
+
+    const manaBefore = p1.mana;
+    steps(match, TICK_RATE);
+    assert.ok(Math.abs(p1.mana - (manaBefore + OVERTIME_MANA_MULTIPLIER)) < 1e-9, "1.5x mana regen in overtime");
+
+    // Next TD wins immediately and skips roundReset/comeback draft
+    addUnit(match, p1, FOOT, 180, ENDZONE_DEPTH + FOOT.speed);
+    const events = stepMatch(match);
+    assert.equal(events.scored.length, 1);
+    assert.equal(events.roundReset, false);
+    assert.equal(getScoreLimitWinner(match)?.id, p1.id);
   });
 });

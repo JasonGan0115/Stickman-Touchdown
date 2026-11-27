@@ -10,6 +10,10 @@ export const MAX_CATCH_UP_TICKS = 5; // after a long stall, skip ahead rather th
 // --- Match ---
 // 3 minutes by default; MATCH_DURATION_SECONDS can shorten it for local testing
 export const MATCH_DURATION_MS = (Number(process.env.MATCH_DURATION_SECONDS) || 180) * 1000;
+export const OVERTIME_DURATION_MS = 60_000; // 60s sudden-death overtime on a tied clock
+export const OVERTIME_MANA_MULTIPLIER = 1.5; // 1.5x Sticky Liquid regen during overtime
+export const KICKOFF_DRAFT_MS = 3000; // 3s pre-match window to pick starting Silver augment
+export const COMEBACK_DRAFT_TIMEOUT_MS = 10000; // max pause for post-round comeback augment draft
 export const WINNING_SCORE = 3;
 
 // --- Field ---
@@ -29,7 +33,7 @@ export const MANA_PER_SECOND = 1;
 export const MANA_PER_TICK = MANA_PER_SECOND / TICK_RATE;
 
 // --- Cooldowns ---
-export const SPAWN_COOLDOWN_SECONDS = 2; // 2s delay between dropping troops
+export const SPAWN_COOLDOWN_SECONDS = 1; // 1s delay between dropping cards
 export const SPAWN_COOLDOWN_TICKS = Math.round(SPAWN_COOLDOWN_SECONDS * TICK_RATE);
 
 // --- Units ---

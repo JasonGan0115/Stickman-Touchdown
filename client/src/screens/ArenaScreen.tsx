@@ -129,6 +129,11 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
 
     // Quick local checks for instant feedback; the server re-checks everything
     const state = store.getState();
+    if (state.phase !== 'playing' || state.kickoffRemainingMs > 0 || state.draftModal?.active) {
+      state.setSpawnError(state.phase === 'kickoff' ? 'Kickoff starting…' : 'Choose your augment first');
+      soundService.playWarning();
+      return;
+    }
     const card = selectSelectedCard(state);
     if (!card) {
       state.setSpawnError('Pick a card first');
@@ -140,7 +145,14 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
       soundService.playWarning();
       return;
     }
-    if (screenY < FIELD_HEIGHT - ENDZONE_DEPTH) {
+    if (card.type === 'Tower') {
+      if (screenY < FIELD_HEIGHT * 0.65 || screenY > FIELD_HEIGHT - 20) {
+        if (LOG_TAPS) console.log(`${tag} not sent: tap was outside the defensive zone`);
+        state.setSpawnError('Place towers inside your defensive zone');
+        soundService.playWarning();
+        return;
+      }
+    } else if (card.type !== 'Spell' && screenY < FIELD_HEIGHT - ENDZONE_DEPTH) {
       if (LOG_TAPS) console.log(`${tag} not sent: tap was outside the bottom endzone on screen`);
       state.setSpawnError('Tap inside your endzone to spawn');
       soundService.playWarning();
@@ -154,6 +166,8 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
     service.spawn(card.cardId, worldX, worldY);
     soundService.playSpawn();
   };
+
+  const selectedCardType = useStore(store, (s) => selectSelectedCard(s)?.type);
 
   return (
     <View style={styles.root}>
@@ -184,11 +198,22 @@ export function ArenaScreen({ store, service, compact = false }: Props) {
             </View>
 
             {/* Screen-space overlays: never rotated, so text stays upright */}
+            {selectedCardType === 'Tower' && (
+              <View style={styles.defensiveZoneHighlight} pointerEvents="none">
+                <Text style={styles.defensiveZoneLabel}>TOWER ZONE</Text>
+              </View>
+            )}
             <View style={[styles.endzoneLabelWrap, { top: 0 }]}>
               <Text style={styles.endzoneLabel}>ENEMY ENDZONE</Text>
             </View>
             <View style={[styles.endzoneLabelWrap, { bottom: 0 }]}>
-              <Text style={styles.endzoneLabel}>HOME ENDZONE · TAP TO SPAWN</Text>
+              <Text style={styles.endzoneLabel}>
+                {selectedCardType === 'Spell'
+                  ? 'SPELL · TAP ANYWHERE ON FIELD'
+                  : selectedCardType === 'Tower'
+                    ? 'TOWER · TAP DEFENSIVE ZONE'
+                    : 'HOME ENDZONE · TAP TO SPAWN'}
+              </Text>
             </View>
             <Hud store={store} compact={compact} />
             <TouchdownBannerOverlay store={store} />
@@ -322,6 +347,7 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
     }
     prevEnemyScore.current = enemyScore;
   }, [enemyScore, enemyScoreScale]);
+  const overtime = useStore(store, (s) => s.overtime);
   const opponentName = useStore(store, (s) => selectOpponent(s)?.username ?? 'ENEMY');
   const tournamentName = useStore(store, (s) => (s.mode === 'tournament' ? (s.tournament?.name ?? 'Weekly Tournament') : null));
   const aiLabel = useStore(store, (s) => {
@@ -344,6 +370,11 @@ function Hud({ store, compact }: { store: GameStore; compact: boolean }) {
           </Animated.Text>
         </View>
       </View>
+      {overtime && (
+        <View style={styles.overtimeBanner}>
+          <Text style={styles.overtimeBannerText}>⚡ SUDDEN DEATH · NEXT TD WINS</Text>
+        </View>
+      )}
       {aiLabel && (
         <View style={styles.aiBanner}>
           <Text style={styles.aiBannerText}>{aiLabel}</Text>
@@ -510,6 +541,26 @@ function ManaBar({ store }: { store: GameStore }) {
   );
 }
 
+function CardGlyph({ card, size }: { card: { cardId: string; type: string; movement?: 'walking' | 'running' | 'sliding' | 'flying' }; size: number }) {
+  if (card.type === 'Spell') {
+    const icon = card.cardId === 'card_zap_shock' ? '⚡' : card.cardId === 'card_glue_freeze' ? '❄️' : '💣';
+    return <Text style={{ fontSize: size * 0.72, lineHeight: size }}>{icon}</Text>;
+  }
+  if (card.type === 'Tower') {
+    const icon = card.cardId === 'card_magnet_tower' ? '🧲' : '🗼';
+    return <Text style={{ fontSize: size * 0.72, lineHeight: size }}>{icon}</Text>;
+  }
+  return (
+    <Stickman
+      type={card.type as 'Melee' | 'Ranged' | 'Tank' | 'Caster'}
+      movement={card.movement}
+      teamColor={COLORS.myUnit}
+      size={size}
+      animated={false}
+    />
+  );
+}
+
 /**
  * The player's cards for this match. Tap one to select it, then tap the
  * endzone to spawn it. Cards you can't afford yet or on cooldown are dimmed.
@@ -529,7 +580,7 @@ function CardHand({ store, compact }: { store: GameStore; compact: boolean }) {
           <Text style={styles.nextCardLabel}>NEXT</Text>
           <View style={styles.nextCardInner}>
             <Text style={styles.nextCostText}>{nextCard.cost}</Text>
-            <Stickman type={nextCard.type} movement={nextCard.movement} teamColor={COLORS.myUnit} size={22} animated={false} />
+            <CardGlyph card={nextCard} size={22} />
           </View>
         </View>
       )}
@@ -567,7 +618,7 @@ function CardHand({ store, compact }: { store: GameStore; compact: boolean }) {
                   </Text>
                 </View>
               )}
-              <Stickman type={card.type} movement={card.movement} teamColor={COLORS.myUnit} size={compact ? 28 : 36} animated={false} />
+              <CardGlyph card={card} size={compact ? 28 : 36} />
               <Text style={styles.cardName} numberOfLines={1}>
                 {card.name}
               </Text>
@@ -575,13 +626,17 @@ function CardHand({ store, compact }: { store: GameStore; compact: boolean }) {
                 <Text
                   style={[
                     styles.cardType,
-                    (card.type === 'Ranged' || card.type === 'Caster' || card.movement === 'flying') &&
+                    (card.type === 'Ranged' || card.type === 'Caster' || card.type === 'Tower' || card.type === 'Spell' || card.movement === 'flying') &&
                       styles.cardTypeAir,
                   ]}
                 >
-                  {card.type === 'Ranged' || card.type === 'Caster' || card.movement === 'flying'
-                    ? 'AIR+GND'
-                    : 'GROUND'}
+                  {card.type === 'Spell'
+                    ? 'SPELL'
+                    : card.type === 'Tower'
+                      ? 'TOWER'
+                      : card.type === 'Ranged' || card.type === 'Caster' || card.movement === 'flying'
+                        ? 'AIR+GND'
+                        : 'GROUND'}
                 </Text>
               )}
               {onCooldown && (
@@ -689,6 +744,28 @@ const styles = StyleSheet.create({
     pointerEvents: 'none',
   },
   endzoneLabel: { color: 'rgba(0,0,0,0.35)', fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
+  defensiveZoneHighlight: {
+    position: 'absolute',
+    top: '65%',
+    bottom: `${(20 / FIELD_HEIGHT) * 100}%`,
+    left: 0,
+    right: 0,
+    borderTopWidth: 2,
+    borderBottomWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#38bdf8',
+    backgroundColor: 'rgba(56, 189, 248, 0.16)',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 6,
+    pointerEvents: 'none',
+  },
+  defensiveZoneLabel: {
+    color: '#bae6fd',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
 
   hud: { position: 'absolute', top: 6, left: 0, right: 0, alignItems: 'center', gap: 4, pointerEvents: 'none' },
   hudPill: { backgroundColor: 'rgba(10,12,18,0.72)', borderRadius: 14, paddingVertical: 4, paddingHorizontal: 16, alignItems: 'center' },
@@ -702,6 +779,8 @@ const styles = StyleSheet.create({
   mirrorSub: { color: '#1a1200', fontSize: 10, fontWeight: '700' },
   aiBanner: { backgroundColor: '#534ab7', borderRadius: 10, paddingVertical: 3, paddingHorizontal: 12 },
   aiBannerText: { color: '#eeedfe', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
+  overtimeBanner: { backgroundColor: '#dc2626', borderRadius: 10, paddingVertical: 3, paddingHorizontal: 12, borderWidth: 1, borderColor: '#fde047' },
+  overtimeBannerText: { color: '#fef08a', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
 
   liquidLabel: { color: COLORS.mana, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
   manaWrap: {

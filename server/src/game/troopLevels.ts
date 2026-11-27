@@ -11,7 +11,13 @@ export const MAX_TROOP_LEVEL = 100;
 export const TROOP_XP_PER_SECOND = 1;
 export const MIN_HOURS_FOR_MAX_LEVEL = 100;
 
-const BASE_XP_PER_LEVEL = 180;
+const EARLY_LEVEL_XP: Record<number, number> = {
+  1: 30,
+  2: 60,
+  3: 100,
+  4: 150,
+};
+const BASE_XP_PER_LEVEL = 195;
 const XP_STEP_PER_LEVEL = 70;
 const STAT_BONUS_PER_LEVEL = 0.002; // +0.2% HP & damage per level above 1 (max +19.8% at Lv.100)
 
@@ -19,6 +25,7 @@ const STAT_BONUS_PER_LEVEL = 0.002; // +0.2% HP & damage per level above 1 (max 
 export function xpToNextTroopLevel(level: number): number {
   const clamped = Math.floor(level);
   if (clamped < MIN_TROOP_LEVEL || clamped >= MAX_TROOP_LEVEL) return 0;
+  if (EARLY_LEVEL_XP[clamped] !== undefined) return EARLY_LEVEL_XP[clamped];
   return BASE_XP_PER_LEVEL + XP_STEP_PER_LEVEL * clamped;
 }
 

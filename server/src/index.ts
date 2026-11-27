@@ -6,10 +6,13 @@ import { Server, type Socket } from "socket.io";
 import { initCronJobs, purgeExpiredAugments } from "./cronJobs";
 import { errorSummary, prisma } from "./db";
 import {
+  COMEBACK_DRAFT_TIMEOUT_MS,
   FIELD_HEIGHT,
   FIELD_WIDTH,
+  KICKOFF_DRAFT_MS,
   MATCH_DURATION_MS,
   MAX_CATCH_UP_TICKS,
+  OVERTIME_DURATION_MS,
   TICK_MS,
   TICK_RATE,
   WINNING_SCORE,
@@ -127,6 +130,15 @@ let cachedTotalTesters = 0;
 // human's own seat gets a bot brain too, so they can watch AI vs AI.
 const matchBots = new Map<string, Map<string, BotState>>();
 const matchAiDifficulty = new Map<string, number>();
+interface MatchDraftState {
+  kickoffEndsAt: number;
+  kickoffPending: Map<string, string>; // playerId -> fallback silver augmentId
+  comebackPlayerId: string | null;
+  comebackDefaultAugmentId: string | null;
+  comebackPausedAt: number;
+  comebackTimeoutAt: number;
+}
+const matchDrafts = new Map<string, MatchDraftState>();
 const isBotControlled = (match: Match, playerId: string) => matchBots.get(match.id)?.has(playerId) ?? false;
 const isBotSeat = (playerId: string) => playerId.startsWith("bot_");
 
@@ -362,6 +374,19 @@ function launchMatch(match: Match, sockets: Socket[], tournament?: WeeklyTournam
   }
   matches.set(matchId, match);
 
+  const kickoffEndsAt = Date.now() + KICKOFF_DRAFT_MS;
+  match.phase = "kickoff";
+  match.endsAt = kickoffEndsAt + MATCH_DURATION_MS;
+  const draftState: MatchDraftState = {
+    kickoffEndsAt,
+    kickoffPending: new Map(),
+    comebackPlayerId: null,
+    comebackDefaultAugmentId: null,
+    comebackPausedAt: 0,
+    comebackTimeoutAt: 0,
+  };
+  matchDrafts.set(matchId, draftState);
+
   const roomPlayers = match.players.map((p) => ({ id: p.id, username: p.username, number: p.number }));
   for (const p of match.players) {
     const opponent = getOpponent(match, p.id)!;
@@ -369,9 +394,11 @@ function launchMatch(match: Match, sockets: Socket[], tournament?: WeeklyTournam
     const opponentPreview = sampleRandomCards(opponentDeck, 4).map(handCardInfo);
     const silverDraftOptions = getDraftOptions("silver", 3);
 
-    // Auto-pick for bot players
-    if (isBotControlled(match, p.id) && silverDraftOptions.length > 0) {
-      applyAugment(p, silverDraftOptions[0].id);
+    // Auto-pick for bot players; human players get a 3s kickoff window
+    if (isBotControlled(match, p.id)) {
+      if (silverDraftOptions.length > 0) applyAugment(p, silverDraftOptions[0].id);
+    } else if (silverDraftOptions.length > 0) {
+      draftState.kickoffPending.set(p.id, silverDraftOptions[0].id);
     }
 
     io.to(p.id).emit("match_found", {
@@ -383,6 +410,7 @@ function launchMatch(match: Match, sockets: Socket[], tournament?: WeeklyTournam
       nextCard: p.drawQueue[0] ? handCardInfo(p.drawQueue[0]) : null, // preview of the next card in deck
       opponentPreview, // 4 random cards revealed from opponent's deck
       silverDraftOptions, // 3 Silver augments to choose from before kickoff
+      kickoffDurationMs: KICKOFF_DRAFT_MS,
       boosts: describeModifiers(p.modifiers), // e.g. ["+10% unit health"]; opponent's are not sent
       durationMs: MATCH_DURATION_MS,
       tickRate: TICK_RATE,
@@ -438,7 +466,59 @@ function runDueTicks(match: Match): void {
   }
 }
 
+function finalizeKickoff(match: Match, draft: MatchDraftState): void {
+  for (const [playerId, defaultAugId] of draft.kickoffPending) {
+    const p = getPlayer(match, playerId);
+    if (p) {
+      applyAugment(p, defaultAugId);
+      io.to(p.id).emit("draft_confirmed", {
+        augmentId: defaultAugId,
+        boosts: describeModifiers(p.modifiers),
+      });
+    }
+  }
+  draft.kickoffPending.clear();
+  match.phase = "playing";
+  match.endsAt = Date.now() + MATCH_DURATION_MS;
+}
+
 function gameTick(match: Match): void {
+  const draft = matchDrafts.get(match.id);
+  const now = Date.now();
+
+  // 3-second pre-match kickoff draft window: no troops or bots may deploy yet
+  if (match.phase === "kickoff" && draft) {
+    if (draft.kickoffPending.size === 0 || now >= draft.kickoffEndsAt) {
+      finalizeKickoff(match, draft);
+    } else {
+      const kickoffRemainingMs = Math.max(0, draft.kickoffEndsAt - now);
+      broadcastState(match, MATCH_DURATION_MS, [], false, kickoffRemainingMs);
+      return;
+    }
+  }
+
+  // Mid-round comeback draft pause after conceding a touchdown
+  if (match.phase === "comeback_draft" && draft) {
+    if (now >= draft.comebackTimeoutAt) {
+      const player = draft.comebackPlayerId ? getPlayer(match, draft.comebackPlayerId) : undefined;
+      if (player && draft.comebackDefaultAugmentId) {
+        applyAugment(player, draft.comebackDefaultAugmentId);
+        io.to(player.id).emit("draft_confirmed", {
+          augmentId: draft.comebackDefaultAugmentId,
+          boosts: describeModifiers(player.modifiers),
+        });
+      }
+      match.endsAt += now - draft.comebackPausedAt;
+      draft.comebackPlayerId = null;
+      draft.comebackDefaultAugmentId = null;
+      match.phase = "playing";
+    } else {
+      const frozenRemainingMs = Math.max(0, match.endsAt - draft.comebackPausedAt);
+      broadcastState(match, frozenRemainingMs);
+      return;
+    }
+  }
+
   match.tick++;
 
   // Computer-controlled seats decide before the simulation step, like a spawn_request would
@@ -446,7 +526,12 @@ function gameTick(match: Match): void {
   if (bots) {
     for (const p of match.players) {
       const brain = bots.get(p.id);
-      const unit = brain && botTick(match, p, brain);
+      const unit =
+        brain &&
+        botTick(match, p, brain, Math.random, (spell) => {
+          io.to(match.id).emit("spell_cast", spell);
+          debugLog("bot", `P${p.number} ${p.username} (AI) cast ${spell.cardId} at (${spell.x.toFixed(0)}, ${spell.y.toFixed(0)})`);
+        });
       if (unit) debugLog("bot", `P${p.number} ${p.username} (AI) spawned ${unit.cardId} ${unit.id} at x ${unit.x.toFixed(0)}`);
     }
   }
@@ -455,7 +540,7 @@ function gameTick(match: Match): void {
   const events = stepMatch(match);
   logTickEvents(match, events);
 
-  // If a touchdown occurred, trigger comeback draft for the conceding player
+  // If a touchdown occurred, trigger comeback draft strictly for the conceding player
   if (events.roundReset && events.scored.length > 0 && !getScoreLimitWinner(match)) {
     const scorer = events.scored[0].scorer;
     const conceding = getOpponent(match, scorer.id);
@@ -463,7 +548,14 @@ function gameTick(match: Match): void {
       const comebackOptions = getDraftOptions("gold_or_legendary", 3);
       debugLog(match.id, `Touchdown comeback draft offered to P${conceding.number} ${conceding.username}`);
       const socket = io.sockets.sockets.get(conceding.id);
-      if (socket) {
+      if (socket && comebackOptions.length > 0) {
+        if (draft) {
+          match.phase = "comeback_draft";
+          draft.comebackPlayerId = conceding.id;
+          draft.comebackDefaultAugmentId = comebackOptions[0].id;
+          draft.comebackPausedAt = now;
+          draft.comebackTimeoutAt = now + COMEBACK_DRAFT_TIMEOUT_MS;
+        }
         socket.emit("comeback_draft", {
           options: comebackOptions,
           reason: "conceded_touchdown",
@@ -477,13 +569,19 @@ function gameTick(match: Match): void {
 
   // Derive remaining time from the wall clock rather than counting ticks:
   // setInterval drifts, so tick count alone would make the match run long.
-  const timeRemainingMs = Math.max(0, match.endsAt - Date.now());
+  let timeRemainingMs = Math.max(0, match.endsAt - Date.now());
+  const [p1, p2] = match.players;
+  if (timeRemainingMs === 0 && p1.score === p2.score && !match.overtime && !getScoreLimitWinner(match)) {
+    match.overtime = true;
+    match.endsAt = Date.now() + OVERTIME_DURATION_MS;
+    timeRemainingMs = OVERTIME_DURATION_MS;
+    debugLog(match.id, `Sudden-Death Overtime started! Score tied ${p1.score}-${p2.score}`);
+  }
 
   const recipients = broadcastState(match, timeRemainingMs, events.killed.map((e) => e.id), events.roundReset);
 
   // Once per second (every TICK_RATE ticks): prove the loop is alive and who it's emitting to
   if (match.tick % TICK_RATE === 0) {
-    const [p1, p2] = match.players;
     debugLog(
       match.id,
       `Tick: ${formatClock(timeRemainingMs)} remaining (tick ${match.tick}, state_update -> ${recipients} socket(s), ` +
@@ -522,7 +620,13 @@ function logTickEvents(match: Match, events: TickEvents): void {
 }
 
 /** Sends each player their own view of the state (own mana, you/opponent score). Returns how many sockets received it. */
-function broadcastState(match: Match, timeRemainingMs: number, killedIds: string[] = [], roundReset = false): number {
+function broadcastState(
+  match: Match,
+  timeRemainingMs: number,
+  killedIds: string[] = [],
+  roundReset = false,
+  kickoffRemainingMs = 0,
+): number {
   // Only what the client needs to draw; combat stats stay on the server
   const entities = match.entities.map((e) => ({
     id: e.id,
@@ -547,7 +651,10 @@ function broadcastState(match: Match, timeRemainingMs: number, killedIds: string
     socket.emit("state_update", {
       matchId: match.id,
       tick: match.tick,
+      phase: match.phase,
+      kickoffRemainingMs,
       timeRemainingMs,
+      overtime: Boolean(match.overtime),
       mana: round(p.mana, 2), // opponent's mana is deliberately not sent
       spawnCooldownRemainingMs: Math.max(0, Math.ceil((p.spawnCooldownTicks / TICK_RATE) * 1000)),
       roundReset,
@@ -572,6 +679,7 @@ function endMatch(match: Match, reason: GameOverReason, forfeitedBy?: string): v
   matches.delete(match.id);
   const practice = matchBots.delete(match.id);
   matchAiDifficulty.delete(match.id);
+  matchDrafts.delete(match.id);
 
   for (const p of match.players) {
     playerMatch.delete(p.id);
@@ -734,15 +842,6 @@ async function startBotMatch(socket: Socket, autoplay: boolean, difficulty?: num
 
   if (level !== undefined) {
     matchAiDifficulty.set(matchId, level);
-  }
-
-  const brains = new Map<string, BotState>([[botId, createBot(level)]]);
-  if (autoplay) brains.set(socket.id, createBot());
-  matchBots.set(matchId, brains);
-
-  launchMatch(match, [socket]);
-
-  if (level !== undefined) {
     const bonus = getAIBonus(level);
     const [humanPlayer, botPlayer] = match.players;
     botPlayer.mana = bonus.startingLiquid;
@@ -751,6 +850,12 @@ async function startBotMatch(socket: Socket, autoplay: boolean, difficulty?: num
       humanPlayer.modifiers.damage *= 1 - bonus.damageDebuff;
     }
   }
+
+  const brains = new Map<string, BotState>([[botId, createBot(level)]]);
+  if (autoplay) brains.set(socket.id, createBot());
+  matchBots.set(matchId, brains);
+
+  launchMatch(match, [socket]);
 }
 
 // ---------------------------------------------------------------------------
@@ -803,6 +908,12 @@ io.on("connection", (socket) => {
       socket.emit("spawn_rejected", { reason: "not_in_match" });
       return;
     }
+    if (match.phase !== "playing") {
+      socket.emit("spawn_rejected", {
+        reason: match.phase === "kickoff" ? "kickoff_active" : "draft_active",
+      });
+      return;
+    }
 
     const result = trySpawn(match, player, payload?.cardId, payload?.x, payload?.y);
     if (!result.ok) {
@@ -820,12 +931,28 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const { entity, stats, hand, drawQueue } = result;
+    const { hand, drawQueue } = result;
     // Tell player their new hand rotation (Clash Royale cycle)
     socket.emit("hand_update", {
       hand: hand.map(handCardInfo),
       nextCard: drawQueue[0] ? handCardInfo(drawQueue[0]) : null,
     });
+    if (result.isSpell) {
+      io.to(match.id).emit("spell_cast", {
+        cardId: result.spell.cardId,
+        x: result.x,
+        y: result.y,
+        radius: result.spell.radius,
+        ownerId: player.id,
+      });
+      debugLog(
+        "spawn",
+        `P${player.number} ${socket.id} cast ${result.spell.name} for ${result.spell.cost} mana at (${result.x.toFixed(1)}, ${result.y.toFixed(1)}), mana left ${player.mana.toFixed(2)}`,
+      );
+      return;
+    }
+
+    const { entity, stats } = result;
     debugLog(
       "spawn",
       `P${player.number} ${socket.id} spawned ${stats.name} ${entity.id} for ${stats.cost} mana at (${entity.x.toFixed(1)}, ${entity.y.toFixed(1)}), mana left ${player.mana.toFixed(2)}`,
@@ -836,27 +963,44 @@ io.on("connection", (socket) => {
     const matchId = playerMatch.get(socket.id);
     const match = matchId ? matches.get(matchId) : undefined;
     const player = match ? getPlayer(match, socket.id) : undefined;
+    const draft = match ? matchDrafts.get(match.id) : undefined;
     if (!match || match.ended || !player || typeof augmentId !== "string") return;
+    if (match.phase !== "kickoff" || !draft?.kickoffPending.has(player.id)) return;
 
     applyAugment(player, augmentId);
+    draft.kickoffPending.delete(player.id);
     socket.emit("draft_confirmed", {
       augmentId,
       boosts: describeModifiers(player.modifiers),
     });
     debugLog("draft", `P${player.number} ${player.username} picked Silver augment ${augmentId}`);
+
+    if (draft.kickoffPending.size === 0) {
+      finalizeKickoff(match, draft);
+      broadcastState(match, MATCH_DURATION_MS);
+    }
   });
 
   socket.on("comeback_pick", ({ augmentId }: { augmentId?: unknown }) => {
     const matchId = playerMatch.get(socket.id);
     const match = matchId ? matches.get(matchId) : undefined;
     const player = match ? getPlayer(match, socket.id) : undefined;
+    const draft = match ? matchDrafts.get(match.id) : undefined;
     if (!match || match.ended || !player || typeof augmentId !== "string") return;
+    if (match.phase !== "comeback_draft" || !draft || draft.comebackPlayerId !== player.id) return;
 
     applyAugment(player, augmentId);
+    match.endsAt += Date.now() - draft.comebackPausedAt;
+    draft.comebackPlayerId = null;
+    draft.comebackDefaultAugmentId = null;
+    match.phase = "playing";
+    match.nextTickAt = Date.now();
+
     socket.emit("draft_confirmed", {
       augmentId,
       boosts: describeModifiers(player.modifiers),
     });
+    broadcastState(match, Math.max(0, match.endsAt - Date.now()));
     debugLog("draft", `P${player.number} ${player.username} picked Comeback augment ${augmentId}`);
   });
 
